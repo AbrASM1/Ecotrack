@@ -1,0 +1,161 @@
+groups:
+  - name: ecotrack.availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cible Prometheus indisponible"
+          description: "Job {{ $labels.job }} / instance {{ $labels.instance }} ne repond plus depuis 1m."
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL injoignable"
+          description: "postgres-exporter rapporte pg_up=0 depuis 1m."
+
+      - alert: NginxWafDown
+        expr: nginx_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nginx WAF stub_status injoignable"
+          description: "nginx-exporter rapporte nginx_up=0 depuis 1m."
+
+  - name: ecotrack.saturation
+    rules:
+      - alert: HighContainerMemory
+        expr: (container_memory_usage_bytes{name=~"ecotrack-.*"} / container_spec_memory_limit_bytes{name=~"ecotrack-.*"} > 0.9) and (container_spec_memory_limit_bytes{name=~"ecotrack-.*"} > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Conteneur proche de sa mem_limit"
+          description: "{{ $labels.name }} utilise plus de 90% de sa mem_limit depuis 5m."
+
+      - alert: HighNodeLoad
+        expr: node_load1 > 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Charge systeme elevee"
+          description: "node_load1 = {{ $value }} depuis 5m."
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Espace disque faible sur /"
+          description: "Moins de 10% d'espace libre sur / depuis 5m."
+
+  - name: ecotrack.security
+    rules:
+      - alert: NginxHttp5xxSpike
+        expr: sum(rate(nginx_http_requests_total[2m])) > 0 and increase(nginx_http_requests_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pic de requetes HTTP sur le WAF"
+          description: "Volume de requetes anormal via nginx-waf sur 5m (scan / flood possible)."
+
+  - name: ecotrack.extended
+    rules:
+      - alert: PostgresConnectionsNearMax
+        expr: sum(pg_stat_activity_count) > 80
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL proche du max de connexions"
+          description: "Plus de 80 connexions actives sur PostgreSQL depuis 2m (max_connections=100)."
+
+      - alert: NodeMemoryAvailableLow
+        expr: node_memory_MemAvailable_bytes / 1024 / 1024 < 512
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Memoire disponible critique sur l'hote"
+          description: "Moins de 512 MiB de RAM disponible depuis 5m ({{ $value | printf \"%.0f\" }} MiB)."
+
+      - alert: NodeFilesystemAlmostFull
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) * 100 < 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Systeme de fichiers / presque plein"
+          description: "Moins de 5% d'espace libre sur / depuis 5m."
+
+      - alert: MultipleScrapeTargetsDown
+        expr: count(up == 0) >= 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Plusieurs cibles Prometheus down"
+          description: "{{ $value }} cibles ne repondent plus depuis 2m (panne large)."
+
+      - alert: NodeLoad5High
+        expr: node_load5 > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Charge systeme soutenue (load5)"
+          description: "node_load5 = {{ $value }} depuis 10m."
+
+      - alert: NginxTrafficSpike
+        expr: rate(nginx_http_requests_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trafic HTTP eleve sur le WAF"
+          description: "Plus de 5 req/s via nginx-waf depuis 5m (scan / flood possible)."
+
+      - alert: PostgresIdleInTransactionHigh
+        expr: sum(pg_stat_activity_count{state="idle in transaction"}) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Transactions PostgreSQL inactives"
+          description: "Plus de 5 sessions 'idle in transaction' depuis 10m (verrous potentiels)."
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Echec du reload de configuration Prometheus"
+          description: "Le dernier rechargement de prometheus.yml a echoue depuis 5m."
+
+      - alert: NginxNoTraffic
+        expr: sum(rate(nginx_http_requests_total[15m])) == 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Aucun trafic sur le WAF"
+          description: "Aucune requete via nginx-waf depuis 15m (service inutilise ou ingress casse)."
+
+      - alert: PrometheusRecentRestart
+        expr: changes(process_start_time_seconds{job="prometheus"}[1h]) > 1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Prometheus a redemarre recemment"
+          description: "Plus d'un redemarrage de Prometheus sur la derniere heure."
