@@ -1,0 +1,9 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: ECOTRACK_PROM
+    type: prometheus
+    access: proxy
+    url: http://172.20.4.40:9090
+    isDefault: true
+    editable: true
