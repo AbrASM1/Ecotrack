@@ -1,0 +1,8 @@
+network.host: 0.0.0.0
+node.name: wazuh-indexer
+cluster.name: wazuh-cluster
+discovery.type: single-node
+path.data: /var/lib/wazuh-indexer
+path.logs: /var/log/wazuh-indexer
+plugins.security.disabled: true
+compatibility.override_main_response_version: true
