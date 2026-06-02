@@ -1,0 +1,504 @@
+networks:
+  dmz:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+          gateway: 172.20.1.1
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.2.0/24
+          gateway: 172.20.2.1
+  db:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.3.0/24
+          gateway: 172.20.3.1
+  monitoring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.4.0/24
+          gateway: 172.20.4.1
+  iot:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.5.0/24
+          gateway: 172.20.5.1
+
+volumes:
+  postgres_data:
+  redis_data:
+  wazuh_indexer_data:
+  wazuh_manager_config:
+  wazuh_manager_logs:
+  prometheus_data:
+  grafana_data:
+  wireguard_config:
+  suricata_logs:
+  nginx_logs:
+
+services:
+  postgres:
+    image: postgis/postgis:latest
+    container_name: ecotrack-postgres
+    restart: unless-stopped
+    mem_limit: 1024m
+    environment:
+      POSTGRES_USER: ecotrack
+      POSTGRES_PASSWORD: ecotrack_pg_pwd
+      POSTGRES_DB: ecotrack
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql 
+    networks:
+      db:
+        ipv4_address: 172.20.3.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecotrack -d ecotrack"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  redis:
+    image: redis:latest
+    container_name: ecotrack-redis
+    restart: unless-stopped
+    mem_limit: 256m
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      backend:
+        ipv4_address: 172.20.2.10
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  api:
+    image: node:latest
+    container_name: ecotrack-api
+    restart: unless-stopped
+    mem_limit: 512m
+    working_dir: /app
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      PGHOST: 172.20.3.10
+      PGPORT: 5432
+      PGUSER: ecotrack
+      PGPASSWORD: ecotrack_pg_pwd
+      PGDATABASE: ecotrack
+      REDIS_HOST: 172.20.2.10
+      REDIS_PORT: 6379
+    volumes:
+      - ./api:/app
+    command: ["sh", "-c", "npm install --no-audit --no-fund && node server.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      backend:
+        ipv4_address: 172.20.2.20
+      db:
+        ipv4_address: 172.20.3.20
+      iot:
+        ipv4_address: 172.20.5.20
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  iot-simulator:
+    image: python:latest
+    container_name: ecotrack-iot-simulator
+    restart: unless-stopped
+    mem_limit: 256m
+    working_dir: /app
+    environment:
+      API_URL: http://172.20.5.20:3000
+      SIM_INTERVAL: 5
+      SIM_DEVICES: 10
+    volumes:
+      - ./iot-simulator:/app
+    command: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && python simulator.py"]
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      iot:
+        ipv4_address: 172.20.5.10
+      monitoring:
+        ipv4_address: 172.20.4.120
+
+  nginx-logs-init:
+    image: busybox:latest
+    container_name: ecotrack-nginx-logs-init
+    command: ["sh", "-c", "mkdir -p /var/log/nginx && chown -R 101:101 /var/log/nginx && chmod 755 /var/log/nginx"]
+    volumes:
+      - nginx_logs:/var/log/nginx
+    restart: "no"
+    network_mode: none
+
+  nginx-waf:
+    image: owasp/modsecurity-crs:nginx
+    container_name: ecotrack-nginx-waf
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      PORT: 8080
+      SSL_PORT: 8443
+      BACKEND: http://172.20.2.20:3000
+      SERVER_NAME: ecotrack.local
+      MODSEC_RULE_ENGINE: "On"
+      MODSEC_REQ_BODY_ACCESS: "On"
+      MODSEC_RESP_BODY_ACCESS: "On"
+      PARANOIA: 1
+      ANOMALY_INBOUND: 10
+      ANOMALY_OUTBOUND: 5
+      ACCESSLOG: /var/log/nginx/ecotrack_access.log
+      ERRORLOG: /var/log/nginx/ecotrack_error.log
+      MODSEC_AUDIT_LOG: /var/log/nginx/modsec_audit.log
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG_TYPE: Serial
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+    volumes:
+      - nginx_logs:/var/log/nginx
+      - ./nginx/stub_status.conf:/etc/nginx/conf.d/stub_status.conf 
+      - ./modsec/REQUEST-900-CUSTOM-SQLI.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf 
+    ports:
+      - "80:8080"
+      - "443:8443"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      api:
+        condition: service_healthy
+      nginx-logs-init:
+        condition: service_completed_successfully
+    networks:
+      dmz:
+        ipv4_address: 172.20.1.10
+      backend:
+        ipv4_address: 172.20.2.30
+
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: ecotrack-suricata
+    restart: unless-stopped
+    mem_limit: 512m
+    network_mode: "service:nginx-waf"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    command: ["-i", "eth0", "-k", "none", "-S", "/etc/suricata/rules/ecotrack.rules"]
+    volumes:
+      - suricata_logs:/var/log/suricata
+      - ./suricata/rules/suricata.rules:/etc/suricata/rules/ecotrack.rules
+    depends_on:
+      - nginx-waf
+
+  wireguard:
+    image: linuxserver/wireguard:latest
+    container_name: ecotrack-wireguard
+    restart: unless-stopped
+    mem_limit: 128m
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+      SERVERPORT: 51820
+      PEERS: 1
+      PEERDNS: auto
+      INTERNAL_SUBNET: 10.13.13.0
+      ALLOWEDIPS: 172.20.1.0/24,172.20.4.0/24
+      SERVERURL: 172.26.0.1
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - wireguard_config:/config
+      - /lib/modules:/lib/modules 
+    ports:
+      - "51820:51820/udp"
+    networks:
+      dmz:
+        ipv4_address: 172.20.1.30
+      monitoring:
+        ipv4_address: 172.20.4.130
+
+  wazuh-certs-generator:
+    image: wazuh/wazuh-certs-generator:0.0.4
+    container_name: ecotrack-wazuh-certs-generator
+    profiles: ["setup"]
+    hostname: wazuh-certs-generator
+    environment:
+      CERT_TOOL_VERSION: "4.14"
+    volumes:
+      - ./wazuh-certs:/certificates
+      - ./wazuh-certs.yml:/config/certs.yml
+    networks:
+      - monitoring
+
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.14.5
+    container_name: ecotrack-wazuh-indexer
+    hostname: wazuh.indexer
+    restart: unless-stopped
+    mem_limit: 2048m
+    environment:
+      OPENSEARCH_JAVA_OPTS: "-Xms1024m -Xmx1024m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+      - ./wazuh-certs/root-ca.pem:/usr/share/wazuh-indexer/config/certs/root-ca.pem
+      - ./wazuh-certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.key
+      - ./wazuh-certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.pem
+      - ./wazuh-certs/admin.pem:/usr/share/wazuh-indexer/config/certs/admin.pem
+      - ./wazuh-certs/admin-key.pem:/usr/share/wazuh-indexer/config/certs/admin-key.pem
+      - ./wazuh-indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/config/opensearch.yml
+      - ./wazuh-indexer/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.10
+        aliases:
+          - wazuh.indexer
+
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.14.5
+    container_name: ecotrack-wazuh-manager
+    hostname: wazuh.manager
+    restart: unless-stopped
+    mem_limit: 1024m
+    environment:
+      INDEXER_URL: https://wazuh.indexer:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecretPassword
+      FILEBEAT_SSL_VERIFICATION_MODE: full
+      SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
+      SSL_CERTIFICATE: /etc/ssl/filebeat.pem
+      SSL_KEY: /etc/ssl/filebeat.key
+      API_USERNAME: wazuh-wui
+      API_PASSWORD: MyS3cr37P450r.*-
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 655360
+        hard: 655360
+    volumes:
+      - wazuh_manager_config:/var/ossec/etc
+      - wazuh_manager_logs:/var/ossec/logs
+      - ./wazuh-certs/root-ca-manager.pem:/etc/ssl/root-ca.pem
+      - ./wazuh-certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
+      - ./wazuh-certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+      - ./wazuh-manager/local_rules.xml:/var/ossec/etc/rules/local_rules.xml
+      - ./wazuh-manager/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
+      - nginx_logs:/var/log/nginx 
+      - suricata_logs:/var/log/suricata 
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "514:514/udp"
+      - "55000:55000"
+    depends_on:
+      wazuh-indexer:
+        condition: service_started
+      nginx-waf:
+        condition: service_healthy
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.20
+        aliases:
+          - wazuh.manager
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.14.5
+    container_name: ecotrack-wazuh-dashboard
+    hostname: wazuh.dashboard
+    restart: unless-stopped
+    mem_limit: 1024m
+    environment:
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecretPassword
+      WAZUH_API_URL: https://wazuh.manager
+      DASHBOARD_USERNAME: kibanaserver
+      DASHBOARD_PASSWORD: kibanaserver
+      API_USERNAME: wazuh-wui
+      API_PASSWORD: MyS3cr37P450r.*-
+    volumes:
+      - ./wazuh-certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
+      - ./wazuh-certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
+      - ./wazuh-certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem
+      - ./wazuh-dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./wazuh-dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+    depends_on:
+      - wazuh-indexer
+      - wazuh-manager
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.30
+        aliases:
+          - wazuh.dashboard
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ecotrack-prometheus
+    restart: unless-stopped
+    mem_limit: 512m
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml 
+      - ./prometheus/rules:/etc/prometheus/rules 
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      - node-exporter
+      - alertmanager
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.40
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: ecotrack-grafana
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ecotrack_grafana_pwd
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning 
+      - ./grafana/dashboards:/var/lib/grafana/dashboards 
+    depends_on:
+      - prometheus
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.50
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: ecotrack-alertmanager
+    restart: unless-stopped
+    mem_limit: 128m
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml 
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.60
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: ecotrack-node-exporter
+    restart: unless-stopped
+    mem_limit: 128m
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+    volumes:
+      - /proc:/host/proc 
+      - /sys:/host/sys 
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.70
+
+  cadvisor:
+    image: google/cadvisor:latest
+    container_name: ecotrack-cadvisor
+    restart: unless-stopped
+    mem_limit: 256m
+    privileged: true
+    volumes:
+      - /:/rootfs 
+      - /var/run:/var/run 
+      - /sys:/sys 
+      - /var/lib/docker/:/var/lib/docker 
+      - /dev/disk/:/dev/disk 
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.80
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: ecotrack-postgres-exporter
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      DATA_SOURCE_NAME: "postgresql://ecotrack:ecotrack_pg_pwd@172.20.3.10:5432/ecotrack?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.90
+      db:
+        ipv4_address: 172.20.3.30
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: ecotrack-nginx-exporter
+    restart: unless-stopped
+    mem_limit: 128m
+    command:
+      - "--nginx.scrape-uri=http://172.20.2.30:8081/stub_status"
+    depends_on:
+      - nginx-waf
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.100
+      backend:
+        ipv4_address: 172.20.2.40
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat-oss:7.10.2
+    container_name: ecotrack-filebeat
+    restart: unless-stopped
+    mem_limit: 256m
+    user: root
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml 
+      - ./wazuh-certs/root-ca.pem:/usr/share/filebeat/certs/root-ca.pem 
+      - nginx_logs:/var/log/nginx 
+      - suricata_logs:/var/log/suricata 
+      - /var/lib/docker/containers:/var/lib/docker/containers 
+      - /var/run/docker.sock:/var/run/docker.sock 
+    depends_on:
+      wazuh-indexer:
+        condition: service_started
+      nginx-waf:
+        condition: service_healthy
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.110
