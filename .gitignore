@@ -1,0 +1,15 @@
+@'
+# Dependances
+node_modules/
+api/node_modules/
+
+# Secrets - NE JAMAIS COMMITER
+wazuh-certs/
+peer1.conf
+*.key
+*-key.pem
+.env
+
+# Runtime
+*.log
+'@ | Set-Content -Encoding UTF8 .gitignore
