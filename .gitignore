@@ -13,3 +13,5 @@ peer1.conf
 # Runtime
 *.log
 '@ | Set-Content -Encoding UTF8 .gitignore
+certs/*.pem
+!certs/.gitkeep
