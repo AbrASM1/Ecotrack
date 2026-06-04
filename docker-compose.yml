@@ -32,6 +32,7 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_backups:
   redis_data:
   wazuh_indexer_data:
   wazuh_manager_config:
@@ -40,6 +41,7 @@ volumes:
   grafana_data:
   wireguard_config:
   suricata_logs:
+  suricata_etrules:
   nginx_logs:
 
 services:
@@ -54,7 +56,23 @@ services:
       POSTGRES_DB: ecotrack
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql 
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command:
+      - "postgres"
+      - "-c"
+      - "logging_collector=off"
+      - "-c"
+      - "log_destination=stderr"
+      - "-c"
+      - "log_statement=mod"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+      - "-c"
+      - "log_line_prefix=%m [%p] %u@%d %r "
+      - "-c"
+      - "log_min_duration_statement=500"
     networks:
       db:
         ipv4_address: 172.20.3.10
@@ -64,6 +82,45 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+
+  postgres-backup:
+    image: postgis/postgis:latest
+    container_name: ecotrack-postgres-backup
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      PGHOST: 172.20.3.10
+      PGPORT: "5432"
+      PGUSER: ecotrack
+      PGPASSWORD: ecotrack_pg_pwd
+      PGDATABASE: ecotrack
+      BACKUP_INTERVAL: "3600"
+      BACKUP_KEEP: "24"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[backup] demarrage : intervalle $${BACKUP_INTERVAL}s, retention $${BACKUP_KEEP} dumps";
+        mkdir -p /backups;
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S);
+          f="/backups/ecotrack-$$ts.sql.gz";
+          echo "[backup] pg_dump -> $$f";
+          if pg_dump --no-owner --clean --if-exists | gzip > "$$f"; then
+            echo "[backup] OK ($$(du -h "$$f" | cut -f1))";
+          else
+            echo "[backup] ECHEC du dump"; rm -f "$$f";
+          fi;
+          ls -1t /backups/ecotrack-*.sql.gz 2>/dev/null | tail -n +$$(($${BACKUP_KEEP}+1)) | xargs -r rm -f;
+          sleep "$${BACKUP_INTERVAL}";
+        done
+    volumes:
+      - postgres_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      db:
+        ipv4_address: 172.20.3.50
 
   redis:
     image: redis:latest
@@ -112,8 +169,6 @@ services:
         ipv4_address: 172.20.2.20
       db:
         ipv4_address: 172.20.3.20
-      iot:
-        ipv4_address: 172.20.5.20
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
@@ -128,9 +183,14 @@ services:
     mem_limit: 256m
     working_dir: /app
     environment:
-      API_URL: http://172.20.5.20:3000
+      API_URL: https://172.20.5.30:8443
+      SIM_VERIFY_TLS: "false"
       SIM_INTERVAL: 5
-      SIM_DEVICES: 10
+      SIM_FLEET_SIZE: 2000
+      SIM_BATCH: 200
+      SIM_WORKERS: 40
+      SIM_ERROR_RATE: "0.01"
+      SIM_OFFLINE_RATE: "0.005"
     volumes:
       - ./iot-simulator:/app
     command: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && python simulator.py"]
@@ -176,8 +236,8 @@ services:
       MODSEC_AUDIT_ENGINE: RelevantOnly
     volumes:
       - nginx_logs:/var/log/nginx
-      - ./nginx/stub_status.conf:/etc/nginx/conf.d/stub_status.conf 
-      - ./modsec/REQUEST-900-CUSTOM-SQLI.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf 
+      - ./nginx/stub_status.conf:/etc/nginx/conf.d/stub_status.conf
+      - ./modsec/REQUEST-900-CUSTOM-SQLI.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
     ports:
       - "80:8080"
       - "443:8443"
@@ -197,6 +257,8 @@ services:
         ipv4_address: 172.20.1.10
       backend:
         ipv4_address: 172.20.2.30
+      iot:
+        ipv4_address: 172.20.5.30
 
   suricata:
     image: jasonish/suricata:latest
@@ -208,10 +270,12 @@ services:
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
-    command: ["-i", "eth0", "-k", "none", "-S", "/etc/suricata/rules/ecotrack.rules"]
+    command: ["/entrypoint.sh"]
     volumes:
       - suricata_logs:/var/log/suricata
+      - suricata_etrules:/var/lib/suricata/rules
       - ./suricata/rules/suricata.rules:/etc/suricata/rules/ecotrack.rules
+      - ./suricata/entrypoint.sh:/entrypoint.sh
     depends_on:
       - nginx-waf
 
@@ -232,12 +296,11 @@ services:
       PEERDNS: auto
       INTERNAL_SUBNET: 10.13.13.0
       ALLOWEDIPS: 172.20.1.0/24,172.20.4.0/24
-      SERVERURL: 172.26.0.1
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - wireguard_config:/config
-      - /lib/modules:/lib/modules 
+      - /lib/modules:/lib/modules
     ports:
       - "51820:51820/udp"
     networks:
@@ -320,8 +383,8 @@ services:
       - ./wazuh-certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
       - ./wazuh-manager/local_rules.xml:/var/ossec/etc/rules/local_rules.xml
       - ./wazuh-manager/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
-      - nginx_logs:/var/log/nginx 
-      - suricata_logs:/var/log/suricata 
+      - nginx_logs:/var/log/nginx
+      - suricata_logs:/var/log/suricata
     ports:
       - "1514:1514"
       - "1515:1515"
@@ -373,8 +436,8 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml 
-      - ./prometheus/rules:/etc/prometheus/rules 
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/rules:/etc/prometheus/rules
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -397,13 +460,15 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning 
-      - ./grafana/dashboards:/var/lib/grafana/dashboards 
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
     networks:
       monitoring:
         ipv4_address: 172.20.4.50
+      db:
+        ipv4_address: 172.20.3.40
 
   alertmanager:
     image: prom/alertmanager:latest
@@ -411,12 +476,23 @@ services:
     restart: unless-stopped
     mem_limit: 128m
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml 
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     networks:
       monitoring:
         ipv4_address: 172.20.4.60
+
+  webhook-logger:
+    image: mendhak/http-https-echo:31
+    container_name: ecotrack-webhook-logger
+    restart: unless-stopped
+    mem_limit: 64m
+    environment:
+      HTTP_PORT: 8080
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.140
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -427,8 +503,8 @@ services:
       - "--path.procfs=/host/proc"
       - "--path.sysfs=/host/sys"
     volumes:
-      - /proc:/host/proc 
-      - /sys:/host/sys 
+      - /proc:/host/proc
+      - /sys:/host/sys
     networks:
       monitoring:
         ipv4_address: 172.20.4.70
@@ -440,11 +516,11 @@ services:
     mem_limit: 256m
     privileged: true
     volumes:
-      - /:/rootfs 
-      - /var/run:/var/run 
-      - /sys:/sys 
-      - /var/lib/docker/:/var/lib/docker 
-      - /dev/disk/:/dev/disk 
+      - /:/rootfs
+      - /var/run:/var/run
+      - /sys:/sys
+      - /var/lib/docker/:/var/lib/docker
+      - /dev/disk/:/dev/disk
     networks:
       monitoring:
         ipv4_address: 172.20.4.80
@@ -456,6 +532,8 @@ services:
     mem_limit: 128m
     environment:
       DATA_SOURCE_NAME: "postgresql://ecotrack:ecotrack_pg_pwd@172.20.3.10:5432/ecotrack?sslmode=disable"
+    command:
+      - "--collector.postmaster"
     depends_on:
       postgres:
         condition: service_healthy
@@ -488,12 +566,12 @@ services:
     user: root
     command: ["filebeat", "-e", "--strict.perms=false"]
     volumes:
-      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml 
-      - ./wazuh-certs/root-ca.pem:/usr/share/filebeat/certs/root-ca.pem 
-      - nginx_logs:/var/log/nginx 
-      - suricata_logs:/var/log/suricata 
-      - /var/lib/docker/containers:/var/lib/docker/containers 
-      - /var/run/docker.sock:/var/run/docker.sock 
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml
+      - ./wazuh-certs/root-ca.pem:/usr/share/filebeat/certs/root-ca.pem
+      - nginx_logs:/var/log/nginx
+      - suricata_logs:/var/log/suricata
+      - /var/lib/docker/containers:/var/lib/docker/containers
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       wazuh-indexer:
         condition: service_started
