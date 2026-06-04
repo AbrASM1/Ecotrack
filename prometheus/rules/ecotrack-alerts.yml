@@ -159,3 +159,41 @@ groups:
         annotations:
           summary: "Prometheus a redemarre recemment"
           description: "Plus d'un redemarrage de Prometheus sur la derniere heure."
+
+  - name: ecotrack.iot_anomalies
+    rules:
+      - alert: IoTValeurDeviationAnormale
+        expr: |
+          abs(iot_value_avg - avg_over_time(iot_value_avg[30m]))
+            > 3 * stddev_over_time(iot_value_avg[30m])
+          and stddev_over_time(iot_value_avg[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deviation anormale de la valeur ({{ $labels.sensor_type }})"
+          description: "La valeur moyenne du type {{ $labels.sensor_type }} s'ecarte de plus de 3 ecarts-types de sa moyenne mobile sur 30m (detection dynamique, hors seuil fixe)."
+
+      - alert: IoTChuteDebitIngestion
+        expr: |
+          sum by (sensor_type) (rate(iot_readings_sent_total[5m]))
+            < 0.4 * sum by (sensor_type) (avg_over_time(rate(iot_readings_sent_total[5m])[1h:5m]))
+          and sum by (sensor_type) (avg_over_time(rate(iot_readings_sent_total[5m])[1h:5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chute du debit d'ingestion ({{ $labels.sensor_type }})"
+          description: "Le debit d'ingestion du type {{ $labels.sensor_type }} est tombe sous 40% de sa moyenne mobile horaire (capteurs muets ou collecte degradee)."
+
+      - alert: IoTAffluxAnomaliesAnormal
+        expr: |
+          sum by (sensor_type) (rate(iot_anomalies_total[5m]))
+            > 3 * sum by (sensor_type) (avg_over_time(rate(iot_anomalies_total[5m])[1h:5m]))
+          and sum by (sensor_type) (avg_over_time(rate(iot_anomalies_total[5m])[1h:5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Afflux anormal d'anomalies ({{ $labels.sensor_type }})"
+          description: "Le taux d'anomalies du type {{ $labels.sensor_type }} depasse 3x sa moyenne mobile horaire (evenement environnemental, panne capteur ou injection de fausses mesures)."
