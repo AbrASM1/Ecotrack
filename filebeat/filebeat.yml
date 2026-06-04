@@ -2,7 +2,7 @@ filebeat.inputs:
   - type: log
     enabled: true
     paths:
-      - /var/log/nginx/access.log
+      - /var/log/nginx/ecotrack_access.log
     fields:
       log_type: nginx-access
     fields_under_root: false
@@ -10,7 +10,7 @@ filebeat.inputs:
   - type: log
     enabled: true
     paths:
-      - /var/log/nginx/error.log
+      - /var/log/nginx/ecotrack_error.log
     fields:
       log_type: nginx-error
     fields_under_root: false
@@ -40,21 +40,37 @@ filebeat.inputs:
     enabled: true
     paths:
       - /var/lib/docker/containers/*/*.log
-    fields:
-      log_type: postgres
-    fields_under_root: false
 
 processors:
   - add_docker_metadata:
       host: "unix:///var/run/docker.sock"
+
   - drop_event:
       when:
         and:
-          - equals:
-              fields.log_type: postgres
+          - has_fields: ["container.id"]
           - not:
-              contains:
-                container.image.name: "postgis"
+              or:
+                - contains:
+                    container.name: "ecotrack-postgres"
+                - contains:
+                    container.name: "ecotrack-wireguard"
+
+  - add_fields:
+      target: fields
+      fields:
+        log_type: postgres
+      when:
+        contains:
+          container.name: "ecotrack-postgres"
+
+  - add_fields:
+      target: fields
+      fields:
+        log_type: wireguard
+      when:
+        contains:
+          container.name: "ecotrack-wireguard"
 
 filebeat.config.modules:
   enabled: false
