@@ -1,163 +1,1354 @@
 {
-    "annotations": { "list": [] },
-    "editable": true,
-    "graphTooltip": 1,
-    "schemaVersion": 39,
-    "tags": ["ecotrack", "iot", "security"],
-    "time": { "from": "now-1h", "to": "now" },
-    "timezone": "browser",
-    "title": "ECOTRACK Overview",
-    "uid": "ecotrack-overview",
-    "version": 2,
-    "refresh": "10s",
-    "templating": { "list": [] },
-    "panels": [
-      { "id": 100, "type": "row", "title": "IoT", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
-      {
-        "id": 1, "title": "IoT readings / sec (global)", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "green", "value": 1 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "sum(rate(iot_readings_sent_total[5m]))", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 2, "title": "Active devices", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "iot_devices_active", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 3, "title": "IoT POST errors (5m)", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "sum(increase(iot_post_errors_total[5m]))", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 4, "title": "IoT POST latency p95", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "s", "decimals": 3, "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 0.5 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum(rate(iot_post_duration_seconds_bucket[5m])) by (le))", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 5, "title": "Readings rate per device", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } } },
-        "targets": [ { "refId": "A", "expr": "rate(iot_readings_sent_total[5m])", "legendFormat": "{{device_id}}", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 6, "title": "Last value per device", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 0, "lineWidth": 1 } } },
-        "targets": [ { "refId": "A", "expr": "iot_last_value", "legendFormat": "{{device_id}}", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 7, "title": "DB ingestion rate (commits/s)", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
-        "targets": [ { "refId": "A", "expr": "rate(pg_stat_database_xact_commit{datname=\"ecotrack\"}[5m])", "legendFormat": "commits/s", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 8, "title": "EcoTrack DB size", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
-        "targets": [ { "refId": "A", "expr": "pg_database_size_bytes{datname=\"ecotrack\"}", "legendFormat": "db size", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      { "id": 200, "type": "row", "title": "Disponibilite / Downtime", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
-      {
-        "id": 10, "title": "Services UP", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 0, "y": 23 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 7 }, { "color": "green", "value": 8 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "sum(up)", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 11, "title": "Targets DOWN", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 6, "y": 23 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "count(up == 0) or vector(0)", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 12, "title": "API availability 1h (%)", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 12, "y": 23 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "percent", "decimals": 2, "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 95 }, { "color": "green", "value": 99 } ] } } },
-        "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "avg_over_time(iot_api_up[1h]) * 100", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 13, "title": "PostgreSQL uptime", "type": "stat",
-        "gridPos": { "h": 5, "w": 6, "x": 18, "y": 23 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 60 } ] } } },
-        "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-        "targets": [ { "refId": "A", "expr": "time() - pg_postmaster_start_time_seconds", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 14, "title": "Service UP/DOWN timeline (per job)", "type": "state-timeline",
-        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }, "max": 1, "min": 0 } },
-        "options": { "showValue": "never", "mergeValues": true },
-        "targets": [ { "refId": "A", "expr": "up", "legendFormat": "{{job}}", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      { "id": 300, "type": "row", "title": "WAF / Securite", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 } },
-      {
-        "id": 20, "title": "HTTP req/s (WAF)", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 20 } } },
-        "targets": [ { "refId": "A", "expr": "rate(nginx_http_requests_total[5m])", "legendFormat": "req/s", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 21, "title": "Nginx connections", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-        "targets": [
-          { "refId": "A", "expr": "nginx_connections_active", "legendFormat": "active", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } },
-          { "refId": "B", "expr": "nginx_connections_reading", "legendFormat": "reading", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } },
-          { "refId": "C", "expr": "nginx_connections_writing", "legendFormat": "writing", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } },
-          { "refId": "D", "expr": "nginx_connections_waiting", "legendFormat": "waiting", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } }
-        ]
-      },
-      { "id": 400, "type": "row", "title": "Ressources conteneurs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 } },
-      {
-        "id": 30, "title": "Memoire par conteneur", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-        "targets": [ { "refId": "A", "expr": "sum by (name) (container_memory_usage_bytes{name=~\"ecotrack-.*\"})", "legendFormat": "{{name}}", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 31, "title": "CPU par conteneur", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-        "targets": [ { "refId": "A", "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"ecotrack-.*\"}[5m]))", "legendFormat": "{{name}}", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } } ]
-      },
-      {
-        "id": 32, "title": "Host load1 / mem available", "type": "timeseries",
-        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
-        "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" },
-        "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [ { "matcher": { "id": "byName", "options": "mem available (MiB)" }, "properties": [ { "id": "unit", "value": "decmbytes" } ] } ] },
-        "targets": [
-          { "refId": "A", "expr": "node_load1", "legendFormat": "load1", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } },
-          { "refId": "B", "expr": "node_memory_MemAvailable_bytes / 1024 / 1024", "legendFormat": "mem available (MiB)", "datasource": { "type": "prometheus", "uid": "ECOTRACK_PROM" } }
-        ]
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "tags": [
+    "ecotrack",
+    "iot",
+    "security"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "ECOTRACK Overview",
+  "uid": "ecotrack-overview",
+  "version": 4,
+  "refresh": "10s",
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "IoT - Flotte de capteurs",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
       }
-    ]
-  }
+    },
+    {
+      "id": 1,
+      "title": "Taille de la flotte",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "iot_fleet_size",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Capteurs actifs",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 1900
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "iot_active_sensors",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Debit lectures/s",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 10
+              }
+            ]
+          },
+          "decimals": 1
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(iot_readings_sent_total[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Taux d'erreur (%)",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 8
+              }
+            ]
+          },
+          "decimals": 2
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(iot_post_errors_total[5m])) / clamp_min(sum(rate(iot_readings_sent_total[5m])) + sum(rate(iot_post_errors_total[5m])), 0.001)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Latence POST p95",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          },
+          "decimals": 3
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(iot_post_duration_seconds_bucket[5m])) by (le))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Latence POST p99",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 3
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum(rate(iot_post_duration_seconds_bucket[5m])) by (le))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Anomalies actives",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(iot_anomaly_active)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Capteurs hors-ligne",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "iot_offline_sensors",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Debit lectures/s par type",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sensor_type) (rate(iot_readings_sent_total[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{sensor_type}}"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Valeur moyenne par type (flotte)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "iot_value_avg",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{sensor_type}}"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "title": "Anomalies/s par type",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sensor_type) (rate(iot_anomalies_total[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{sensor_type}}"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "title": "Top 10 zones (debit lectures/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (zone) (rate(iot_readings_sent_total[5m])))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{zone}}"
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "title": "Ingestion DB (commits/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"ecotrack\"}[5m])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "commits/s"
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "title": "Taille DB EcoTrack",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pg_database_size_bytes{datname=\"ecotrack\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "db size"
+        }
+      ]
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Disponibilite / Downtime",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "id": 10,
+      "title": "Services UP",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 7
+              },
+              {
+                "color": "green",
+                "value": 8
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(up)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Targets DOWN",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(up == 0) or vector(0)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "API availability 1h (%)",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "decimals": 2
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg_over_time(iot_api_up[1h]) * 100",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "PostgreSQL uptime",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - pg_postmaster_start_time_seconds",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Service UP/DOWN timeline (per job)",
+      "type": "state-timeline",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "max": 1,
+          "min": 0
+        }
+      },
+      "options": {
+        "showValue": "never",
+        "mergeValues": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "WAF / Securite",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      }
+    },
+    {
+      "id": 20,
+      "title": "HTTP req/s (WAF)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(nginx_http_requests_total[5m])",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "req/s"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Nginx connections",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nginx_connections_active",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "active"
+        },
+        {
+          "refId": "B",
+          "expr": "nginx_connections_reading",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "reading"
+        },
+        {
+          "refId": "C",
+          "expr": "nginx_connections_writing",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "writing"
+        },
+        {
+          "refId": "D",
+          "expr": "nginx_connections_waiting",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "waiting"
+        }
+      ]
+    },
+    {
+      "id": 400,
+      "type": "row",
+      "title": "Ressources conteneurs",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      }
+    },
+    {
+      "id": 30,
+      "title": "Memoire par conteneur",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (id) (container_memory_usage_bytes{id=~\".*docker.*\"})",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{id}}"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "CPU par conteneur",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (id) (rate(container_cpu_usage_seconds_total{id=~\".*docker.*\"}[5m]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "{{id}}"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "title": "Host load1 / mem available",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ECOTRACK_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "mem available (MiB)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decmbytes"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_load1",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "load1"
+        },
+        {
+          "refId": "B",
+          "expr": "node_memory_MemAvailable_bytes / 1024 / 1024",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ECOTRACK_PROM"
+          },
+          "legendFormat": "mem available (MiB)"
+        }
+      ]
+    },
+    {
+      "id": 500,
+      "type": "row",
+      "title": "Cartographie",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      }
+    },
+    {
+      "id": 50,
+      "title": "Cartographie des capteurs (Paris) - derniere valeur",
+      "type": "geomap",
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "ECOTRACK_PG"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT DISTINCT ON (device_id) device_id, split_part(device_id,'-',1) AS type, split_part(device_id,'-',2) AS zone, ST_Y(geom) AS latitude, ST_X(geom) AS longitude, value, recorded_at FROM iot_readings WHERE recorded_at > NOW() - INTERVAL '10 minutes' ORDER BY device_id, recorded_at DESC",
+          "datasource": {
+            "type": "postgres",
+            "uid": "ECOTRACK_PG"
+          }
+        }
+      ],
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 48.86,
+          "lon": 2.345,
+          "zoom": 11.5
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": false
+        },
+        "basemap": {
+          "type": "default",
+          "name": "Layer 0"
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "capteurs",
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "config": {
+              "showLegend": true,
+              "style": {
+                "size": {
+                  "fixed": 6,
+                  "min": 3,
+                  "max": 12
+                },
+                "color": {
+                  "field": "value"
+                },
+                "opacity": 0.75,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                }
+              }
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
