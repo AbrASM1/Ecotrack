@@ -1,0 +1,3 @@
+Place mkcert output here: ecotrack.local.pem (cert) and ecotrack.local-key.pem (key).
+Generate with:  mkcert -install && mkcert ecotrack.local
+The .pem files are gitignored (the key is private).

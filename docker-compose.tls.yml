@@ -1,0 +1,5 @@
+services:
+  nginx-waf:
+    volumes:
+      - ./certs/ecotrack.local.pem:/etc/nginx/conf/server.crt:ro
+      - ./certs/ecotrack.local-key.pem:/etc/nginx/conf/server.key:ro
