@@ -1,0 +1,102 @@
+name: ci-securite
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    name: Validation et anti-fuite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Anti-fuite de secrets (fichiers suivis par Git)
+        run: |
+          set -e
+          motifs='(^|/)node_modules/|\.pem$|-key\.pem$|(^|/)peer1\.conf$|\.key$|(^|/)\.env$|\.log$'
+          fuites="$(git ls-files | grep -E "$motifs" || true)"
+          if [ -n "$fuites" ]; then
+            echo "::error::Fichiers sensibles suivis par Git (a retirer du depot) :"
+            echo "$fuites"
+            exit 1
+          fi
+          echo "Aucun fichier sensible suivi par Git."
+
+      - name: Lint docker compose (base)
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Lint docker compose (surcharge TLS)
+        run: docker compose -f docker-compose.yml -f docker-compose.tls.yml config --quiet
+
+      - name: Validation syntaxique YAML / JSON
+        run: |
+          python3 - <<'PY'
+          import sys, glob, json
+          try:
+              import yaml
+          except ImportError:
+              import subprocess
+              subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pyyaml"], check=True)
+              import yaml
+          err = 0
+          for f in glob.glob("**/*.yml", recursive=True) + glob.glob("**/*.yaml", recursive=True):
+              try:
+                  list(yaml.safe_load_all(open(f, encoding="utf-8")))
+              except Exception as e:
+                  print(f"::error::YAML invalide {f}: {e}"); err = 1
+          for f in glob.glob("**/*.json", recursive=True):
+              if "node_modules/" in f:
+                  continue
+              try:
+                  json.load(open(f, encoding="utf-8"))
+              except Exception as e:
+                  print(f"::error::JSON invalide {f}: {e}"); err = 1
+          print("Validation YAML/JSON terminee.")
+          sys.exit(err)
+          PY
+
+  trivy-depot:
+    name: Trivy — IaC et secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          trivy --version
+
+      - name: Scan des mauvaises configurations (IaC)
+        run: trivy config --severity HIGH,CRITICAL --exit-code 0 .
+
+      - name: Scan de secrets en clair (BLOQUANT)
+        run: trivy fs --scanners secret --exit-code 1 .
+
+      - name: Scan de vulnerabilites du depot (informatif)
+        run: trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 .
+
+  trivy-images:
+    name: Trivy — vulnerabilites des images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - owasp/modsecurity-crs:nginx
+          - postgis/postgis:latest
+          - redis:latest
+          - node:latest
+          - grafana/grafana:11.2.0
+    steps:
+      - name: Installer Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+
+      - name: Scan ${{ matrix.image }}
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "${{ matrix.image }}"
