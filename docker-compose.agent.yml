@@ -1,0 +1,24 @@
+services:
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.14.5
+    container_name: ecotrack-wazuh-agent
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      WAZUH_MANAGER: wazuh.manager
+      WAZUH_MANAGER_PORT: "1514"
+      WAZUH_REGISTRATION_SERVER: wazuh.manager
+      WAZUH_REGISTRATION_PORT: "1515"
+      WAZUH_AGENT_NAME: ecotrack-waf-agent
+      WAZUH_AGENT_GROUP: default
+    volumes:
+      - ./wazuh-agent/ossec-agent.conf:/wazuh-config-mount/etc/ossec.conf
+      - ./modsec:/etc/ecotrack-config/modsec:ro
+      - ./nginx:/etc/ecotrack-config/nginx:ro
+      - ./suricata/rules:/etc/ecotrack-config/suricata-rules:ro
+    depends_on:
+      wazuh-manager:
+        condition: service_started
+    networks:
+      monitoring:
+        ipv4_address: 172.20.4.150

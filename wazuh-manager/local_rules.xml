@@ -1,72 +1,78 @@
 <group name="ecotrack,local,">
 
-    <rule id="100110" level="10">
-      <if_sid>31100,31101,31103,31104,31105,31106,31151,31152,31153,31164,31166</if_sid>
-      <description>ECOTRACK: attaque web detectee sur l'API (HIGH)</description>
-      <mitre>
-        <id>T1190</id>
-      </mitre>
-      <group>attack,web,ecotrack,</group>
-    </rule>
-  
-    <rule id="100112" level="12">
-      <if_sid>31103,31104,31105</if_sid>
-      <description>ECOTRACK: injection SQL sur l'API (CRITICAL)</description>
-      <mitre>
-        <id>T1190</id>
-      </mitre>
-      <group>attack,sqli,ecotrack,</group>
-    </rule>
-  
-    <rule id="100114" level="12">
-      <decoded_as>json</decoded_as>
-      <field name="transaction.messages.details.ruleId">9000001</field>
-      <description>ECOTRACK: SQLi bloquee par ModSecurity sur l'API (CRITICAL)</description>
-      <mitre>
-        <id>T1190</id>
-      </mitre>
-      <group>attack,sqli,modsec,ecotrack,</group>
-    </rule>
-  
-    <rule id="100115" level="12">
-      <decoded_as>json</decoded_as>
-      <field name="transaction.messages.details.ruleId">9000002</field>
-      <description>ECOTRACK: scanner de vulnerabilites bloque par ModSecurity (CRITICAL)</description>
-      <mitre>
-        <id>T1595</id>
-      </mitre>
-      <group>attack,scanner,modsec,ecotrack,</group>
-    </rule>
-  
-    <rule id="100113" level="12" frequency="3" timeframe="120">
-      <if_matched_sid>100110</if_matched_sid>
-      <same_source_ip />
-      <description>ECOTRACK: attaque web repetee depuis la meme source (CRITICAL)</description>
-      <mitre>
-        <id>T1595</id>
-      </mitre>
-      <group>attack,scanner,ecotrack,</group>
-    </rule>
-  
-    <rule id="100111" level="13" frequency="8" timeframe="120">
-      <if_matched_sid>100110</if_matched_sid>
-      <same_source_ip />
-      <description>ECOTRACK: attaque web soutenue - incident actif (CRITICAL)</description>
-      <mitre>
-        <id>T1595</id>
-        <id>T1190</id>
-      </mitre>
-      <group>attack,scan,ecotrack,</group>
-    </rule>
-  
-    <rule id="100120" level="12" frequency="6" timeframe="60">
-      <if_matched_sid>5710</if_matched_sid>
-      <same_source_ip />
-      <description>ECOTRACK: tentatives d'authentification multiples - brute force (CRITICAL)</description>
-      <mitre>
-        <id>T1110</id>
-      </mitre>
-      <group>authentication_failures,ecotrack,</group>
-    </rule>
-  
-  </group>
+  <rule id="100109" level="0">
+    <if_sid>31100,31101,31108,31151,31152,31153,31120,31121</if_sid>
+    <url>/api/iot_unavailable</url>
+    <description>ECOTRACK: trafic de test simulateur (ignore)</description>
+  </rule>
+
+  <rule id="100110" level="10">
+    <if_sid>31103,31104,31105,31106,31164,31166</if_sid>
+    <description>ECOTRACK: attaque web detectee sur l'API (HIGH)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,web,ecotrack,</group>
+  </rule>
+
+  <rule id="100112" level="12">
+    <if_sid>31103,31104,31105</if_sid>
+    <description>ECOTRACK: injection SQL sur l'API (CRITICAL)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,sqli,ecotrack,</group>
+  </rule>
+
+  <rule id="100114" level="12">
+    <decoded_as>json</decoded_as>
+    <field name="transaction.messages.details.ruleId">9000001</field>
+    <description>ECOTRACK: SQLi bloquee par ModSecurity sur l'API (CRITICAL)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,sqli,modsec,ecotrack,</group>
+  </rule>
+
+  <rule id="100115" level="12">
+    <decoded_as>json</decoded_as>
+    <field name="transaction.messages.details.ruleId">9000002</field>
+    <description>ECOTRACK: scanner de vulnerabilites bloque par ModSecurity (CRITICAL)</description>
+    <mitre>
+      <id>T1595</id>
+    </mitre>
+    <group>attack,scanner,modsec,ecotrack,</group>
+  </rule>
+
+  <rule id="100113" level="12" frequency="3" timeframe="120">
+    <if_matched_sid>100110</if_matched_sid>
+    <same_source_ip />
+    <description>ECOTRACK: attaque web repetee depuis la meme source (CRITICAL)</description>
+    <mitre>
+      <id>T1595</id>
+    </mitre>
+    <group>attack,scanner,ecotrack,</group>
+  </rule>
+
+  <rule id="100111" level="13" frequency="8" timeframe="120">
+    <if_matched_sid>100110</if_matched_sid>
+    <same_source_ip />
+    <description>ECOTRACK: attaque web soutenue - incident actif (CRITICAL)</description>
+    <mitre>
+      <id>T1595</id>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,scan,ecotrack,</group>
+  </rule>
+
+  <rule id="100120" level="12" frequency="6" timeframe="60">
+    <if_matched_sid>5710</if_matched_sid>
+    <same_source_ip />
+    <description>ECOTRACK: tentatives d'authentification multiples - brute force (CRITICAL)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,ecotrack,</group>
+  </rule>
+
+</group>
