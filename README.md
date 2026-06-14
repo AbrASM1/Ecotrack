@@ -1,31 +1,34 @@
 # ECOTRACK
 
-Plateforme IoT urbaine sécurisée : ingestion géolocalisée d'une flotte de capteurs, supervision temps réel, WAF en mode blocage, IDS/IPS, SIEM et accès d'administration restreint par VPN. L'ensemble est décrit dans un unique `docker-compose.yml` (segmentation réseau stricte, IPAM statique).
+Secure connected-bin waste-management platform: geolocated ingestion of a sensor fleet, real-time monitoring, business KPIs, blocking-mode WAF, network IDS, SIEM, and VPN-restricted administration. The whole stack is declared in a single `docker-compose.yml` with strict network segmentation and static IPAM.
+
+A short, hands-on usage guide is available in `GUIDE.md`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Client([Client / Attaquant])
+  Client([Client / Attacker])
   Admin([Admin])
 
   subgraph dmz["DMZ 172.20.1.0/24"]
-    WAF["nginx + ModSecurity CRS<br/>(WAF, block mode)"]
-    SUR["Suricata IDS<br/>(ET Open + regles locales)"]
-    WG["WireGuard<br/>(VPN)"]
+    WAF["nginx + ModSecurity CRS<br/>WAF, block mode"]
+    SUR["Suricata IDS<br/>ET Open + local rules"]
+    WG["WireGuard VPN"]
   end
 
   subgraph backend["BACKEND 172.20.2.0/24"]
-    API["API Express"]
-    REDIS["Redis (cache)"]
+    API["Express API"]
+    REDIS["Redis cache"]
   end
 
   subgraph db["DB 172.20.3.0/24"]
     PG["PostgreSQL + PostGIS"]
+    BK["pg_dump backup"]
   end
 
   subgraph iot["IOT 172.20.5.0/24"]
-    SIM["Simulateur<br/>2000 capteurs"]
+    SIM["Simulator<br/>2000 connected bins"]
   end
 
   subgraph mon["MONITORING 172.20.4.0/24"]
@@ -36,19 +39,20 @@ flowchart LR
     WAZI["Wazuh Indexer"]
     WAZM["Wazuh Manager"]
     WAZD["Wazuh Dashboard"]
+    AGENT["Wazuh Agent, optional"]
     FB["Filebeat"]
     EXP["node / cAdvisor / postgres / nginx exporters"]
   end
 
   Client -->|"443 / 80"| WAF
+  SIM -->|"POST /api/iot over HTTPS"| WAF
   WAF --> API
-  SUR -. "inspecte l'ingress" .- WAF
+  SUR -. "inspects ingress" .- WAF
   API --> PG
   API --> REDIS
-  SIM -->|"POST /api/iot (HTTPS/TLS)"| WAF
 
   Admin -->|"tunnel 51820/udp"| WG
-  WG -.->|"acces interne uniquement"| GRAF
+  WG -.->|"internal access only"| GRAF
   WG -.-> PROM
   WG -.-> WAZD
 
@@ -61,132 +65,217 @@ flowchart LR
 
   WAF -->|"access / error / modsec"| FB
   SUR -->|"eve.json"| FB
-  PG -->|"stdout"| FB
-  WG -->|"stdout"| FB
   FB --> WAZI
   WAZM --> WAZI
-  WAZD --> WAZI
+  AGENT -->|"FIM / SCA"| WAZM
 ```
 
-## Réseaux (5 bridges, IPAM statique)
+## Networks
 
-| Réseau | Plage | Rôle |
+Five static-IPAM bridge networks isolate the data, persistence, monitoring, and ingestion planes.
+
+| Network | Range | Plane |
 |---|---|---|
-| dmz | 172.20.1.0/24 | Exposition publique (WAF, VPN) |
-| backend | 172.20.2.0/24 | API et cache, non exposés |
-| db | 172.20.3.0/24 | PostgreSQL/PostGIS isolé |
-| monitoring | 172.20.4.0/24 | Supervision, SIEM, exporters |
-| iot | 172.20.5.0/24 | Flotte de capteurs |
+| dmz | 172.20.1.0/24 | Public edge: WAF, VPN |
+| backend | 172.20.2.0/24 | Application: API, cache |
+| db | 172.20.3.0/24 | Persistence: PostgreSQL |
+| monitoring | 172.20.4.0/24 | Monitoring and SIEM |
+| iot | 172.20.5.0/24 | Sensor ingestion |
 
-## Chaîne de traitement
+Multi-homing is always an explicit least-privilege decision. The PostgreSQL exporter and Grafana hold a leg on `db` for base reads and mapping. The WAF holds a leg on `iot` to act as the ingestion gateway. The API has no leg on `iot`, so sensor traffic is forced through the WAF and cannot bypass inspection.
 
-La donnée capteur entre par le WAF (443/80), traverse l'API qui l'écrit dans PostgreSQL (PostGIS, géolocalisée) et met en cache la dernière valeur dans Redis. Les métriques applicatives et système remontent vers Prometheus, qui alimente Grafana et déclenche Alertmanager. Tous les journaux (nginx, ModSecurity, Suricata, PostgreSQL, WireGuard) sont collectés par Filebeat et indexés dans Wazuh, où des règles de corrélation produisent des alertes de sévérité haute et critique.
+## Data model: connected waste bins
 
-## Sécurité
+The fleet simulates smart waste bins across 16 Paris zones. Each bin reports a fill level in percent through an ultrasonic sensor, with a progressive growth specific to its zone and category, a collection event when the threshold is reached, and an overflow above 90 percent. Eight categories: general waste GEN, recyclables REC, organic ORG, glass GLA, paper PAP, textile TEX, e-waste EWA, hazardous HAZ. Each bin also reports internal temperature, estimated weight, and sensor battery level.
 
-- **Chiffrement du flux capteurs** : la flotte poste en **HTTPS/TLS** vers le WAF (terminaison TLS), qui inspecte le trafic via ModSecurity avant relai a l'API. L'API n'a aucune patte sur le segment `iot` : tout POST capteur est force par la passerelle, le contournement direct est impossible.
-- **WAF** ModSecurity (OWASP CRS) en mode blocage + règles custom (SQLi sur `/api`, User-Agents de scanners) → réponses 403.
-- **IDS** Suricata en sidecar sur l'ingress du WAF, ruleset Emerging Threats Open (plus de 50 000 règles) combiné aux règles locales.
-- **SIEM** Wazuh (indexer/manager/dashboard) en TLS, corrélation multi-sources, SCA désactivé pour réduire le bruit.
-- **Segmentation** réseau stricte : le réseau monitoring est inatteignable depuis l'API ; la base n'est jamais exposée.
-- **Accès d'administration VPN-only** : aucune interface d'admin n'est publiée sur l'hôte. Seuls le WAF (80/443) et WireGuard (51820/udp) sont exposés. Les UIs (Grafana, Prometheus, Alertmanager, Wazuh) ne sont joignables qu'à travers le tunnel, par IP interne.
+Bin identifiers encode the category and the zone, for example `GEN-Montmartre-0001`. The value persisted in PostGIS is the fill level, which makes the Grafana map directly usable with bins colored by fill level. Metrics stay low-cardinality, aggregated by category and zone, with the fine-grained identity living in the database.
 
-> Filtrage Nord-Sud `iptables`/`DOCKER-USER` : non implémenté sous Docker Desktop/WSL2 (chaîne non persistante au redémarrage de la VM et non testable depuis l'hôte). L'objectif d'exposition réduite (uniquement 443 et 51820) est atteint par le retrait des publications de ports et le VPN. En production sur hôte Linux, le script `DOCKER-USER` (politique DROP + exceptions 443/tcp, 51820/udp) rendu persistant via `iptables-persistent` complète le dispositif.
+### Key indicators
 
-## Démarrage
+**Operational:**
+
+| KPI | Prometheus metric | Reading |
+|-----|-------------------|---------|
+| Average fill level | `waste_fill_percent_avg{category,zone}` | fleet state |
+| Bins to collect at or above 80 percent | `waste_bins_to_collect{category}` | collection load |
+| Bins overflowing at or above 90 percent | `waste_bins_overflow{category}` | service incidents |
+| Average fill at collection | `waste_fill_at_collection_avg_percent` | routing efficiency, higher is better |
+| Collections performed | `waste_collections_total{category,zone}` | activity |
+| Overflow events | `waste_overflow_events_total{category}` | service quality |
+| Fill rate | `waste_fill_rate_percent_per_hour{category}` | route forecast |
+| Fleet utilization | `waste_capacity_utilization_percent` | sizing |
+
+**Environmental:**
+
+| KPI | Metric | Reading |
+|-----|--------|---------|
+| Diversion rate | `waste_diversion_rate_percent` | share of recoverable waste, REC ORG GLA PAP |
+| Collected tonnage | `waste_collected_kg_total{category}` | processed volume |
+
+**Fleet health:**
+
+| KPI | Metric | Reading |
+|-----|--------|---------|
+| Offline bins | `waste_bins_offline` | telemetry reliability |
+| Average sensor battery | `waste_battery_percent_avg` | preventive maintenance |
+| Average internal temperature | `waste_bin_temperature_celsius_avg{category}` | fire and odor risk |
+| Bins in temperature alert | `waste_bins_temperature_alert` | fire risk |
+
+Useful derived queries: full bins across all categories `sum(waste_bins_to_collect)`; top zones to collect `topk(5, avg by (zone) (waste_fill_percent_avg))`; collection pace `sum(rate(waste_collections_total[1h]))`.
+
+The Grafana dashboard **ECOTRACK - Gestion des déchets** presents these KPIs: diversion and utilization gauges, fill level by zone and category, bins to collect, tonnage, fleet health, and a map of bins colored by fill level.
+
+## Data path
+
+Sensor data enters through the WAF over HTTPS, transits the API which writes to PostgreSQL with PostGIS geolocation and caches the last value in Redis. Application and system metrics flow to Prometheus, which feeds Grafana and triggers Alertmanager. Logs from nginx, ModSecurity, Suricata, PostgreSQL, and WireGuard are collected by Filebeat and indexed in Wazuh, where correlation rules produce high and critical alerts.
+
+## Security
+
+- **Sensor flow encryption** : the fleet posts over HTTPS to the WAF, which terminates TLS and inspects the traffic through ModSecurity before relaying to the API. The API has no leg on the `iot` network, so every sensor POST is forced through the gateway and direct bypass is impossible.
+- **WAF** ModSecurity with the OWASP CRS in blocking mode, plus custom rules: SQL injection on `/api`, scanner User-Agents, both returning 403.
+- **IDS** Suricata as a sidecar on the WAF ingress, Emerging Threats Open ruleset combined with local rules, more than 50000 active rules.
+- **SIEM** Wazuh indexer, manager, and dashboard over TLS, multi-source correlation, SCA disabled to reduce noise.
+- **Network segmentation** : the monitoring plane is unreachable from the API, and the database is never exposed.
+- **VPN-only administration** : no admin interface is published on the host. Only the WAF on 80 and 443 and WireGuard on 51820/udp are exposed. Consoles are reachable only through the tunnel, by internal IP.
+
+> North-South `iptables`/`DOCKER-USER` filtering is not implemented under Docker Desktop/WSL2, since the chain is not persistent across VM restarts and not testable from the host. The reduced-exposure objective is met by removing port publications and by the VPN. On a native Linux host, a persistent `DOCKER-USER` script with a DROP policy and 443/tcp and 51820/udp exceptions completes the setup.
+
+Suricata runs in IDS mode. Inline blocking is not available under Docker Desktop/WSL2, since the probe is not in-path and NFQUEUE is not reliable. Prevention is enforced at layer 7 by ModSecurity in blocking mode, which is in-path and returns 403. On a native Linux host, Suricata switches to IPS over NFQUEUE without changing the rule logic.
+
+## SIEM collection: two configurations
+
+Filebeat is present in both cases. The mode is chosen at startup.
+
+**Configuration A, agentless, default.** The Wazuh manager reads the WAF, ModSecurity, and Suricata logs directly through mounted volumes and `localfile`, and applies its correlation rules. Filebeat archives raw logs into the indexer in parallel. No agent to deploy.
 
 ```powershell
-# 1. Certificats TLS Wazuh (une fois)
-docker compose --profile setup run --rm wazuh-certs-generator
-docker run --rm -v "${PWD}/wazuh-certs:/certs" alpine sh -c "chmod 644 /certs/*.pem; chown -R 1000:1000 /certs"
-
-# 2. Démarrage de la stack
 docker compose up -d
 ```
 
-## Accès
-
-| Interface | Accès | Identifiants |
-|---|---|---|
-| Application (WAF) | https://ecotrack.local / http://localhost | — |
-| Dashboard live IoT | http://localhost/dashboard | — |
-| Grafana | http://172.20.4.50:3000 (VPN) | admin / ecotrack_grafana_pwd |
-| Prometheus | http://172.20.4.40:9090 (VPN) | — |
-| Alertmanager | http://172.20.4.60:9093 (VPN) | — |
-| Wazuh Dashboard | https://172.20.4.30:5601 (VPN) | admin / SecretPassword |
-
-L'accès aux interfaces d'administration requiert le tunnel WireGuard actif (voir `peer1.conf`, endpoint sur la passerelle WSL).
-
-## Notifications d'alerte
-
-Alertmanager route les alertes vers un récepteur webhook (`webhook-logger`) dont la sortie est consultable via `docker logs ecotrack-webhook-logger`. Pour notifier Slack ou Discord, renseigner l'URL dans `alertmanager/alertmanager.yml` (receiver `chat`) et basculer `route.receiver` ; pour Discord, ajouter le suffixe `/slack` à l'URL du webhook.
-
-## Certificat TLS local (mkcert)
-
-Pour servir le WAF sur `https://ecotrack.local` sans avertissement navigateur, generer un certificat de confiance local avec mkcert (cote hote Windows) :
+**Configuration B, with a Wazuh agent.** An official `wazuh/wazuh-agent:4.14.5` agent enrolls with the manager. It adds what the agentless mode does not cover: file integrity monitoring on the security rules, active response readiness, and configuration assessment. The manager and Filebeat are unchanged, and the agent does not re-collect the same logs, which avoids duplicate alerts.
 
 ```powershell
-mkcert -install
-mkcert ecotrack.local
-# place ecotrack.local.pem et ecotrack.local-key.pem dans .\certs\
+docker compose -f docker-compose.yml -f docker-compose.agent.yml up -d
 ```
 
-Ajouter l'entree hosts (PowerShell admin) :
+The agent then appears in the Wazuh console under Agents. Its FIM detects any change to the read-only files mounted under `/etc/ecotrack-config`: ModSecurity rules, nginx configuration, Suricata rules. If enrollment fails, the manager may require a registration password through `WAZUH_REGISTRATION_PASSWORD`.
+
+## Dynamic anomaly detection
+
+Beyond static thresholds, the Prometheus rule group `ecotrack.iot_anomalies` detects deviations from the fleet recent behavior without a fixed threshold.
+
+- `IoTValeurDeviationAnormale` : a category average fill deviates by more than three standard deviations from its 30-minute moving average.
+- `IoTChuteDebitIngestion` : a category ingestion rate drops below 40 percent of its hourly moving average.
+- `IoTAffluxAnomaliesAnormal` : an anomaly rate exceeds three times its hourly moving average.
+
+These alerts surface in Prometheus at `http://172.20.4.40:9090/alerts` and are routed by Alertmanager.
+
+## Alert notifications
+
+Alertmanager routes alerts to a webhook receiver, readable through `docker logs ecotrack-webhook-logger`. To notify Slack or Discord, set the URL in `alertmanager/alertmanager.yml` under the `chat` receiver and switch `route.receiver`. For Discord, append `/slack` to the webhook URL.
+
+## PostgreSQL backup
+
+The `postgres-backup` service runs a compressed `pg_dump` at a regular interval through `BACKUP_INTERVAL`, default 3600 seconds, into the `postgres_backups` volume, with rotation through `BACKUP_KEEP`, default 24 dumps.
 
 ```powershell
-Add-Content C:\Windows\System32\drivers\etc\hosts "127.0.0.1 ecotrack.local"
+docker exec ecotrack-postgres-backup sh -c "ls -lh /backups"            # list
+docker exec -i ecotrack-postgres sh -c "zcat | psql -U ecotrack -d ecotrack" < dump.sql   # restore
 ```
 
-Demarrer la stack avec l'override TLS (qui monte le certificat dans le WAF) :
+For a quick demo, lower the interval with `BACKUP_INTERVAL: "60"`.
+
+## Continuous integration
+
+The `.github/workflows/ci.yml` workflow validates every push and pull request to `main` and `master`.
+
+- **Secret-leak guard**, blocking: fails if a sensitive file is tracked by Git, such as `*.pem`, `*-key.pem`, `peer1.conf`, `*.key`, `.env`, `node_modules/`.
+- **Compose lint** : `docker compose config` on the base file and the TLS override.
+- **YAML/JSON validation** : every configuration file must parse.
+- **Trivy IaC** : infrastructure misconfiguration scan.
+- **Trivy secrets**, blocking: hardcoded-secret scan.
+- **Trivy images** : vulnerability scan of key images, informational.
+
+## Install and run
+
+Host preparation on Windows with Docker Desktop and WSL2, once, in an **administrator PowerShell** :
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d nginx-waf
+powershell -ExecutionPolicy Bypass -File .\prepare-host.ps1
 ```
 
-La cle privee (`certs/*.pem`) est exclue du depot par `.gitignore`.
-
-## Sauvegarde PostgreSQL
-
-Le service `postgres-backup` realise un `pg_dump` compresse a intervalle regulier (`BACKUP_INTERVAL`, defaut 3600s) dans le volume `postgres_backups`, avec rotation (`BACKUP_KEEP`, defaut 24 dumps).
+This registers `ecotrack.local`, installs the local mkcert certificate authority, and generates the WAF certificate in `.\certs\`. Start the stack:
 
 ```powershell
-# lister les sauvegardes
-docker exec ecotrack-postgres-backup sh -c "ls -lh /backups"
-# restaurer une sauvegarde
-docker exec -i ecotrack-postgres sh -c "zcat | psql -U ecotrack -d ecotrack" < dump.sql
+# 1. Wazuh TLS certificates, once
+docker compose --profile setup run --rm wazuh-certs-generator
+docker run --rm -v "${PWD}/wazuh-certs:/certs" alpine sh -c "chmod 644 /certs/*.pem; chown -R 1000:1000 /certs"
+
+# 2. Start with the WAF TLS override
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
-Pour une demo rapide, reduire l'intervalle : `BACKUP_INTERVAL: "60"`.
+To revert host changes at the end of the project: `powershell -ExecutionPolicy Bypass -File .\cleanup-host.ps1`.
 
-## Tableau de bord SOC
+## Access
 
-Wazuh integre nativement le mapping MITRE ATT&CK (menu Threat Intelligence). Le guide `wazuh-dashboard/SOC-DASHBOARD.md` detaille la construction d'un dashboard SOC dedie (alertes critiques, top attaquants, timeline, techniques MITRE) avec les requetes DQL pretes a l'emploi.
+| Interface | Access | Address | Credentials |
+|---|---|---|---|
+| Application | Public | https://ecotrack.local | — |
+| Live bin dashboard | Public | https://ecotrack.local/dashboard | — |
+| Grafana, waste KPIs | VPN | http://172.20.4.50:3000 | admin / ecotrack_grafana_pwd |
+| Wazuh, SOC console | VPN | https://172.20.4.30:5601 | admin / SecretPassword |
+| Prometheus | VPN | http://172.20.4.40:9090 | — |
+| Alertmanager | VPN | http://172.20.4.60:9093 | — |
+| cAdvisor | VPN | http://172.20.4.80:8080 | — |
 
-## Detection d'anomalies dynamique
+The credentials above are demonstration values and must be changed in production.
 
-En complement des seuils statiques (`iot_anomalies_total`), le groupe d'alertes `ecotrack.iot_anomalies` detecte les ecarts par rapport au comportement recent de la flotte, sans seuil fixe :
+### Administration access over WireGuard
 
-- `IoTValeurDeviationAnormale` : la valeur moyenne d'un type s'ecarte de plus de 3 ecarts-types de sa moyenne mobile sur 30 minutes (z-score).
-- `IoTChuteDebitIngestion` : le debit d'ingestion d'un type chute sous 40% de sa moyenne mobile horaire (capteurs muets).
-- `IoTAffluxAnomaliesAnormal` : le taux d'anomalies d'un type depasse 3x sa moyenne mobile horaire (evenement ou injection de fausses mesures).
+Admin interfaces respond only while the tunnel is up. On the Windows client, the configuration derives from `peer1.conf` with three adjustments: remove `ListenPort` from the `[Interface]` block, set `Endpoint` to the WSL gateway `172.26.0.1:51820`, add `PersistentKeepalive = 25`.
 
-Ces alertes remontent dans Prometheus (`http://172.20.4.40:9090/alerts`) et sont routees par Alertmanager comme les autres.
+VPN troubleshooting:
 
-## Integration continue (CI/CD)
+- **Container stopped** : `docker ps --filter name=ecotrack-wireguard` must show `Up` and `0.0.0.0:51820->51820/udp`.
+- **Port 51820 reserved by Windows**, shown as an `access permissions` error at container start. Hyper-V or WSL may reserve the port after a reboot. In an administrator PowerShell: `net stop winnat` then `net start winnat`, then restart the container. Inspect reserved ranges with `netsh int ipv4 show excludedportrange protocol=udp`.
+- **No handshake** : `docker exec ecotrack-wireguard wg show`, then compare client and server keys. After a `--force-recreate`, confirm the interface public key matches the client `[Peer]`.
+- **Endpoint** : the WSL gateway IP can change; recheck with `Get-NetIPAddress -AddressFamily IPv4 | ? InterfaceAlias -match "WSL|vEthernet"`.
 
-Le workflow `.github/workflows/ci-securite` valide chaque push et pull request vers `main` :
+## Validation and tests
 
-- **Anti-fuite de secrets** (bloquant) : echec si un fichier sensible est suivi par Git (`*.pem`, `*-key.pem`, `peer1.conf`, `*.key`, `.env`, `node_modules/`).
-- **Lint de la composition** : `docker compose config` sur la base et sur la surcharge TLS.
-- **Validation YAML/JSON** : tous les fichiers de configuration doivent parser.
-- **Trivy IaC** : detection des mauvaises configurations d'infrastructure.
-- **Trivy secrets** (bloquant) : detection de secrets en clair dans le depot.
-- **Trivy images** : scan de vulnerabilites des images cles (informatif).
+Fleet and ingestion state, the counter must grow:
 
-## Tests
+```powershell
+docker exec ecotrack-postgres psql -U ecotrack -d ecotrack -tAc "SELECT count(*) FROM iot_readings WHERE recorded_at > NOW() - INTERVAL '2 minutes'"
+```
+
+SQL injection test, the response must be 403:
+
+```powershell
+curl.exe -sk "https://ecotrack.local/api/iot?id=1%27%20OR%20%271%27=%271" -o NUL -w "code=%{http_code}`n"
+```
+
+WAF block check, the counter must grow after the attack:
+
+```powershell
+docker exec ecotrack-nginx-waf sh -c "grep -c 9000001 /var/log/nginx/modsec_audit.log"
+```
+
+Wazuh correlation check, after about fifteen seconds:
+
+```powershell
+docker exec ecotrack-wazuh-manager sh -c "grep -E '100112|100114|100115' /var/ossec/logs/alerts/alerts.json | tail -3"
+```
+
+Suricata detection check, the number must be greater than zero:
+
+```powershell
+docker exec ecotrack-suricata sh -c "grep -c 'event_type.:.alert' /var/log/suricata/eve.json"
+```
+
+Full campaign, tunnel active, about ten to fifteen minutes. It checks the stack end to end and runs an offensive phase with nmap, wafw00f, nikto, and sqlmap, correlating attacks with ModSecurity blocks and Suricata and Wazuh alerts:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test-ecotrack.ps1
 ```
-
-Le script vérifie la stack de bout en bout (conteneurs, routage WAF, plan de données, segmentation, supervision, SIEM, KPI) et lance une phase offensive avec de vrais outils (nmap, wafw00f, nikto, sqlmap) en corrélant les attaques avec le blocage ModSecurity et les alertes Suricata/Wazuh.
