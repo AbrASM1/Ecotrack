@@ -9,9 +9,10 @@ peer1.conf
 *.key
 *-key.pem
 .env
-
-# Runtime
-*.log
-'@ | Set-Content -Encoding UTF8 .gitignore
 certs/*.pem
 !certs/.gitkeep
+
+# Runtime & Local
+*.log
+prepare-host.ps1
+'@ | Set-Content -Encoding UTF8 .gitignore
