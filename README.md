@@ -14,7 +14,10 @@ flowchart LR
   subgraph dmz["DMZ 172.20.1.0/24"]
     WAF["nginx + ModSecurity CRS<br/>WAF, block mode"]
     SUR["Suricata IDS<br/>ET Open + local rules"]
-    WG["WireGuard VPN"]
+  end
+
+  subgraph vpn["VPN 172.20.6.0/24"]
+    WG["WireGuard"]
   end
 
   subgraph backend["BACKEND 172.20.2.0/24"]
@@ -52,7 +55,7 @@ flowchart LR
   API --> REDIS
 
   Admin -->|"tunnel 51820/udp"| WG
-  WG -.->|"internal access only"| GRAF
+  WG -.->|"leg on monitoring"| GRAF
   WG -.-> PROM
   WG -.-> WAZD
 
@@ -72,17 +75,18 @@ flowchart LR
 
 ## Networks
 
-Five static-IPAM bridge networks isolate the data, persistence, monitoring, and ingestion planes.
+Six static-IPAM bridge networks isolate the data, persistence, monitoring, ingestion, and remote-access planes.
 
 | Network | Range | Plane |
 |---|---|---|
-| dmz | 172.20.1.0/24 | Public edge: WAF, VPN |
+| dmz | 172.20.1.0/24 | Public edge: WAF, IDS |
 | backend | 172.20.2.0/24 | Application: API, cache |
 | db | 172.20.3.0/24 | Persistence: PostgreSQL |
 | monitoring | 172.20.4.0/24 | Monitoring and SIEM |
 | iot | 172.20.5.0/24 | Sensor ingestion |
+| vpn | 172.20.6.0/24 | Remote administration access |
 
-Multi-homing is always an explicit least-privilege decision. The PostgreSQL exporter and Grafana hold a leg on `db` for base reads and mapping. The WAF holds a leg on `iot` to act as the ingestion gateway. The API has no leg on `iot`, so sensor traffic is forced through the WAF and cannot bypass inspection.
+Multi-homing is always an explicit least-privilege decision. The PostgreSQL exporter and Grafana hold a leg on `db` for base reads and mapping. The WAF holds a leg on `iot` to act as the ingestion gateway. The API has no leg on `iot`, so sensor traffic is forced through the WAF and cannot bypass inspection. WireGuard sits in the dedicated `vpn` network with an additional leg on `monitoring` to deliver administrator traffic, and is kept off the `dmz` so the exposed edge has no direct adjacency with the administration plane.
 
 ## Data model: connected waste bins
 
@@ -279,3 +283,19 @@ Full campaign, tunnel active, about ten to fifteen minutes. It checks the stack 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test-ecotrack.ps1
 ```
+
+## SOC dashboard
+
+Wazuh ships the MITRE ATT&CK mapping under Threat Intelligence. The guide `wazuh-dashboard/SOC-DASHBOARD.md` details how to build a dedicated SOC dashboard with critical alerts, top attackers, timeline, and MITRE techniques, with ready-to-use DQL queries.
+
+## Repository files
+
+| File | Role |
+|---|---|
+| `docker-compose.yml` | Main composition |
+| `docker-compose.tls.yml` | TLS override, local WAF certificate |
+| `docker-compose.agent.yml` | Wazuh agent override |
+| `prepare-host.ps1` / `cleanup-host.ps1` | Host preparation and revert |
+| `test-ecotrack.ps1` | Validation and offensive test campaign |
+| `GUIDE.md` | Simple usage guide, in French |
+| `wazuh-dashboard/SOC-DASHBOARD.md` | SOC dashboard build guide |
