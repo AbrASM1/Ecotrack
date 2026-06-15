@@ -29,6 +29,12 @@ networks:
       config:
         - subnet: 172.20.5.0/24
           gateway: 172.20.5.1
+  vpn:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.6.0/24
+          gateway: 172.20.6.1
 
 volumes:
   postgres_data:
@@ -295,7 +301,7 @@ services:
       PEERS: 1
       PEERDNS: auto
       INTERNAL_SUBNET: 10.13.13.0
-      ALLOWEDIPS: 172.20.1.0/24,172.20.4.0/24
+      ALLOWEDIPS: 172.20.4.0/24
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
@@ -304,8 +310,8 @@ services:
     ports:
       - "51820:51820/udp"
     networks:
-      dmz:
-        ipv4_address: 172.20.1.30
+      vpn:
+        ipv4_address: 172.20.6.30
       monitoring:
         ipv4_address: 172.20.4.130
 
