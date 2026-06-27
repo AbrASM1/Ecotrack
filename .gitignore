@@ -15,4 +15,3 @@ certs/*.pem
 # Runtime & Local
 *.log
 prepare-host.ps1
-'@ | Set-Content -Encoding UTF8 .gitignore
